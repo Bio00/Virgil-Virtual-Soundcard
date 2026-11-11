@@ -115,6 +115,7 @@ devices:
 
 | Dante Controller | Virgil setting | Effect |
 |---|---|---|
+| Rename Device | `name` (Dante rules: letters, digits, `-`) | saved, audio engine restarts under the new name |
 | Device Latency | `latency_us` (receive latency, 0.5–200 ms) | saved, audio engine restarts |
 | Sample Rate | `sample_rate` (44.1, 48, 88.2, 96 kHz) | saved, audio engine restarts |
 | Reboot | | audio engine restarts |

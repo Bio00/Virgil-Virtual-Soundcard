@@ -327,6 +327,37 @@ int run_daemon(virgil::DaemonContext& ctx, void (*on_started)()) {
                         virgil::wall_ms());
           remote_reload = true;
         }
+        // "Rename Device" in Dante Controller: saved as the device name;
+        // the engine restarts and announces itself under it.
+        const std::string new_name = engine->take_remote_name();
+        if (!new_name.empty()) {
+          std::string why, path, err;
+          {
+            std::lock_guard<std::mutex> l(ctx.mutex);
+            virgil::Config check = ctx.cfg;
+            check.device_name = new_name;
+            if (new_name == ctx.cfg.device_name) {
+              why = "unchanged";
+            } else if (virgil::validate_config(&check, &why)) {
+              if (ctx.config_path.empty()) ctx.config_path = virgil::default_config_path();
+              path = ctx.config_path;
+            }
+          }
+          if (!path.empty()) {
+            if (virgil::set_config_value(path, "device", "name", new_name, &err)) {
+              VIRGIL_LOG_INFO("Dante Controller renamed Virgil to \"%s\"; saved to %s, restarting the audio engine",
+                              new_name.c_str(), path.c_str());
+              ctx.diag.note(virgil::Diagnostics::Kind::Service,
+                            "Renamed in Dante Controller to " + new_name + " (audio engine restarted)",
+                            virgil::wall_ms());
+              remote_reload = true;
+            } else {
+              VIRGIL_LOG_WARN("could not save the name from Dante Controller: %s", err.c_str());
+            }
+          } else if (why != "unchanged") {
+            VIRGIL_LOG_WARN("name from Dante Controller refused: %s", why.c_str());
+          }
+        }
         if (remote_reload) {
           {
             std::lock_guard<std::mutex> l(ctx.mutex);

@@ -320,6 +320,23 @@ fn forward_setting(s: inferno_aoip::device_server::RemoteSetting) {
     }
 }
 
+static NAME_CB: RwLock<Option<extern "C" fn(*const c_char)>> = RwLock::new(None);
+
+fn forward_device_name(name: &str) {
+    let cb = *NAME_CB.read().unwrap();
+    if let (Some(cb), Ok(c)) = (cb, CString::new(name)) {
+        cb(c.as_ptr());
+    }
+}
+
+/// Called (from a Dante thread) when the device is renamed in Dante
+/// Controller ("Rename Device"). NULL removes it.
+#[no_mangle]
+pub extern "C" fn vg_dante_set_device_name_callback(cb: Option<extern "C" fn(*const c_char)>) {
+    *NAME_CB.write().unwrap() = cb;
+    inferno_aoip::device_server::set_device_name_hook(if cb.is_some() { Some(forward_device_name) } else { None });
+}
+
 /// Called (from a Dante thread) when Dante Controller changes a device
 /// setting: kind 1 = receive latency (ns), 2 = sample rate (Hz), 3 = reboot,
 /// 4 = identify. NULL removes it; without one Virgil offers no settings.

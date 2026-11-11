@@ -258,6 +258,7 @@ bool Engine::start(std::unique_ptr<ClockSource> clock) {
     }
     vg_dante_set_rename_callback(&Engine::on_rename);
     vg_dante_set_settings_callback(&Engine::on_remote_setting);
+    vg_dante_set_device_name_callback(&Engine::on_remote_name);
     dante_ = vg_dante_start(&dc);
     if (!dante_) {
       const char* why = vg_dante_last_error();
@@ -277,6 +278,7 @@ bool Engine::start(std::unique_ptr<ClockSource> clock) {
       }
       vg_dante_set_rename_callback(nullptr);
       vg_dante_set_settings_callback(nullptr);
+      vg_dante_set_device_name_callback(nullptr);
       clock_.reset();
       return false;
     }
@@ -343,6 +345,7 @@ void Engine::stop() {
   if (was_current) {
     vg_dante_set_rename_callback(nullptr);
     vg_dante_set_settings_callback(nullptr);
+    vg_dante_set_device_name_callback(nullptr);
   }
   if (dante_) {
     vg_dante_set_clock_master(nullptr);
@@ -696,6 +699,20 @@ void Engine::on_remote_setting(int kind, uint32_t value) {
   if (!g_engine) return;
   std::lock_guard<std::mutex> n(g_engine->names_mutex_);
   if (g_engine->remote_settings_.size() < 64) g_engine->remote_settings_.push_back({kind, value});
+}
+
+void Engine::on_remote_name(const char* name) {
+  std::lock_guard<std::mutex> l(g_engine_mutex);
+  if (!g_engine || !name) return;
+  std::lock_guard<std::mutex> n(g_engine->names_mutex_);
+  g_engine->remote_name_ = name;
+}
+
+std::string Engine::take_remote_name() {
+  std::lock_guard<std::mutex> l(names_mutex_);
+  std::string r;
+  r.swap(remote_name_);
+  return r;
 }
 
 std::vector<Engine::RemoteSetting> Engine::take_remote_settings() {

@@ -47,6 +47,38 @@ pub(crate) fn notify(setting: RemoteSetting) -> bool {
   }
 }
 
+/// Receives a device name set in Dante Controller ("Rename Device").
+pub type DeviceNameHook = fn(&str);
+static NAME_HOOK: Mutex<Option<DeviceNameHook>> = Mutex::new(None);
+
+pub fn set_device_name_hook(hook: Option<DeviceNameHook>) {
+  *NAME_HOOK.lock().unwrap_or_else(|e| e.into_inner()) = hook;
+}
+
+pub(crate) fn notify_device_name(name: &str) -> bool {
+  let hook = *NAME_HOOK.lock().unwrap_or_else(|e| e.into_inner());
+  match hook {
+    Some(h) => {
+      h(name);
+      true
+    }
+    None => false,
+  }
+}
+
+/// Name from an ARC opcode 0x1001 (set device name): the content after the
+/// header is the name, NUL-terminated. Dante names: 1-31 letters, digits and
+/// '-', not starting or ending with '-'.
+pub fn parse_device_name_set(content: &[u8]) -> Option<String> {
+  let end = content.iter().position(|&b| b == 0).unwrap_or(content.len());
+  let name = std::str::from_utf8(&content[..end]).ok()?;
+  let ok = (1..=31).contains(&name.len())
+    && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+    && !name.starts_with('-')
+    && !name.ends_with('-');
+  ok.then(|| name.to_owned())
+}
+
 pub(crate) fn hook_installed() -> bool {
   HOOK.lock().unwrap_or_else(|e| e.into_inner()).is_some()
 }
@@ -336,6 +368,17 @@ mod tests {
     assert_eq!(&c[8..12], &96000u32.to_be_bytes());
     assert_eq!(&c[16..20], &44100u32.to_be_bytes());
     assert_eq!(c.len(), 16 + 16);
+  }
+
+  #[test]
+  fn parses_device_name() {
+    assert_eq!(parse_device_name_set(b"Studio-A\0"), Some("Studio-A".to_owned()));
+    assert_eq!(parse_device_name_set(b"NoNul"), Some("NoNul".to_owned()));
+    assert_eq!(parse_device_name_set(b"\0"), None);
+    assert_eq!(parse_device_name_set(b"-bad\0"), None);
+    assert_eq!(parse_device_name_set(b"has space\0"), None);
+    assert_eq!(parse_device_name_set(&[b'a'; 32]), None);
+    assert_eq!(parse_device_name_set(&[0xff, 0xfe, 0]), None);
   }
 
   #[test]

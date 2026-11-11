@@ -90,6 +90,9 @@ enum {
   VG_SETTING_IDENTIFY = 4,
 };
 void vg_dante_set_settings_callback(void (*cb)(int kind, uint32_t value));
+// Called from a Dante thread when the device is renamed in Dante Controller
+// ("Rename Device"). NULL removes it.
+void vg_dante_set_device_name_callback(void (*cb)(const char* name));
 // Current name of a channel of the running device into buf (len bytes).
 // Returns 0 if the device has not published its names yet.
 int vg_dante_channel_name(int is_tx, uint32_t index, char* buf, uint32_t len);

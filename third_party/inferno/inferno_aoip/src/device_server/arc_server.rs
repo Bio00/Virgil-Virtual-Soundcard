@@ -87,6 +87,26 @@ pub async fn run_server(
           conn.respond_with_struct(CODE_OK, response).await;
         }
 
+        0x1001 => {
+          // Virgil patch: "Rename Device" in Dante Controller. The host saves
+          // the name and restarts the device under it.
+          match remote_config::parse_device_name_set(request.content()) {
+            Some(name) if remote_config::notify_device_name(&name) => {
+              info!("Dante Controller renamed the device to {name:?}");
+              let mut body = name.into_bytes();
+              body.push(0);
+              conn.respond(&body).await;
+            }
+            Some(name) => {
+              warn!("Dante Controller asked to rename the device to {name:?}; not supported here");
+              conn.respond_with_code(0x0022, &[]).await;
+            }
+            None => {
+              warn!("Dante Controller asked for a device name Dante does not allow: {}", hex::encode(request.content()));
+              conn.respond_with_code(0x0022, &[]).await;
+            }
+          }
+        }
         GET_DEVICE_NAME_OPCODE => {
           // device name (used by network-audio-controller)
           let mut buff = ByteBuffer::new();

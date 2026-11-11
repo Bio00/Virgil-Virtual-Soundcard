@@ -49,7 +49,7 @@ pub use crate::ring_buffer::{new_owned, ExternalBufferParameters, PositionReport
 pub use settings::Settings;
 pub use info_mcast_server::{set_clock_master, set_product_version};
 pub use saved_settings::{current_name, set_name_overrides, set_rename_hook, RenameHook};
-pub use remote_config::{set_remote_setting_hook, RemoteSetting, RemoteSettingHook};
+pub use remote_config::{set_device_name_hook, set_remote_setting_hook, DeviceNameHook, RemoteSetting, RemoteSettingHook};
 pub type AtomicSample = atomic::Atomic<Sample>;
 
 use channels_subscriber::{ChannelsBuffering, ChannelsSubscriber, ExternalBuffering, OwnedBuffering};
