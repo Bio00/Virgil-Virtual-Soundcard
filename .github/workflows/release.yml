@@ -23,9 +23,17 @@ on:
         description: "Create the release as a private draft (visible to maintainers only until published)"
         type: boolean
         default: false
+      suffix:
+        description: "Mark a patched build: appended to the version Virgil shows (e.g. -dcfix); empty = none"
+        required: false
+        default: ""
 
 permissions:
   contents: write
+
+# A patched build shows <version><suffix> (CMakeLists.txt reads it).
+env:
+  VIRGIL_BUILD_SUFFIX: ${{ github.event.inputs.suffix }}
 
 jobs:
   # A release must carry the version it is built with: refuse a tag (or a

@@ -2,7 +2,9 @@ cmake_minimum_required(VERSION 3.16)
 project(virgil VERSION 0.8.3 LANGUAGES C CXX)
 # Marks a patched build in the version Virgil shows (e.g. -DVIRGIL_VERSION_SUFFIX=-dcfix
 # shows 0.8.3-dcfix); the numeric version used by packages and bundles stays.
-set(VIRGIL_VERSION_SUFFIX "" CACHE STRING "text appended to the version Virgil shows")
+# Defaults to the VIRGIL_BUILD_SUFFIX environment variable, so every platform's
+# packaging script (and the Release workflow's `suffix` input) marks the build.
+set(VIRGIL_VERSION_SUFFIX "$ENV{VIRGIL_BUILD_SUFFIX}" CACHE STRING "text appended to the version Virgil shows")
 set(VIRGIL_VERSION_STRING "${PROJECT_VERSION}${VIRGIL_VERSION_SUFFIX}")
 
 set(CMAKE_CXX_STANDARD 17)
