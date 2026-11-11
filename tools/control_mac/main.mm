@@ -28,6 +28,7 @@
 #include "desktop_audio_engine.h"
 #include "desktop_audio_mac.h"
 #include "settings_model.h"
+#include "update_check.h"
 #include "view.h"
 #include "windows_mac.h"
 
@@ -471,6 +472,19 @@ RemoteInfo parse_remote(const std::string& status_body) {
   }
 
   std::thread([self] { [self pollLoop]; }).detach();
+  // Update check at most once a day, a few seconds after start; it only
+  // speaks up when a newer release is out (Check for Updates… always answers).
+  {
+    NSUserDefaults* d = [NSUserDefaults standardUserDefaults];
+    const NSTimeInterval last = [d doubleForKey:@"lastUpdateCheck"];
+    const NSTimeInterval now = [NSDate date].timeIntervalSince1970;
+    if (now - last > 24 * 3600) {
+      [d setDouble:now forKey:@"lastUpdateCheck"];
+      dispatch_after(dispatch_time(DISPATCH_TIME_NOW, int64_t(8 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        [self checkForUpdatesQuietly:YES];
+      });
+    }
+  }
   if (portable() && vc::http(g_port, "GET", "/api/status").status != 200) [self startService:nil];
   if (!self.startHidden) [self showWindow:nil];
   if (g_open_desktop) [self showDesktopAudio:nil];
@@ -482,6 +496,7 @@ RemoteInfo parse_remote(const std::string& status_body) {
   NSMenu* bar = [[NSMenu alloc] init];
   NSMenu* app = [[NSMenu alloc] initWithTitle:@"Virgil"];
   [[app addItemWithTitle:@"About Virgil" action:@selector(about:) keyEquivalent:@""] setTarget:self];
+  [[app addItemWithTitle:@"Check for Updates…" action:@selector(checkForUpdates:) keyEquivalent:@""] setTarget:self];
   [app addItem:[NSMenuItem separatorItem]];
   [[app addItemWithTitle:@"Settings…" action:@selector(showSettings:) keyEquivalent:@","] setTarget:self];
   [app addItem:[NSMenuItem separatorItem]];
@@ -527,6 +542,7 @@ RemoteInfo parse_remote(const std::string& status_body) {
   add(@"Edit configuration…", @selector(showConfigEditor:));
   add(@"Show log", @selector(showLog:));
   self.autostartItem = add(@"Start at login", @selector(toggleAutostart:));
+  add(@"Check for Updates…", @selector(checkForUpdates:));
   add(@"About Virgil", @selector(about:));
   [m addItem:[NSMenuItem separatorItem]];
   add(@"Quit Virgil Control", @selector(quit:));
@@ -785,6 +801,79 @@ RemoteInfo parse_remote(const std::string& status_body) {
   set_autostart(!autostart_enabled());
 }
 
+// ---- updates (GitHub releases, see update_check.h) ----
+- (void)checkForUpdates:(id)sender {
+  [self checkForUpdatesQuietly:NO];
+}
+// quietly: only when an update is available (the daily check at start).
+- (void)checkForUpdatesQuietly:(BOOL)quietly {
+  NSMutableURLRequest* req =
+      [NSMutableURLRequest requestWithURL:[NSURL URLWithString:@(vc::kUpdateReleasesApi)]
+                              cachePolicy:NSURLRequestReloadIgnoringLocalCacheData
+                          timeoutInterval:15];
+  [req setValue:@"application/vnd.github+json" forHTTPHeaderField:@"Accept"];
+  [req setValue:@"Virgil-Control" forHTTPHeaderField:@"User-Agent"];
+  NSURLSessionDataTask* task = [[NSURLSession sharedSession]
+      dataTaskWithRequest:req
+        completionHandler:^(NSData* data, NSURLResponse* resp, NSError* error) {
+          const NSInteger code = [resp isKindOfClass:[NSHTTPURLResponse class]] ? ((NSHTTPURLResponse*)resp).statusCode : 0;
+          std::vector<vc::ReleaseInfo> rels;
+          std::string problem;
+          if (error || code != 200 || !data) {
+            problem = error ? std::string(error.localizedDescription.UTF8String ?: "network error")
+                            : "GitHub answered " + std::to_string(long(code));
+          } else {
+            id json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+            if (![json isKindOfClass:[NSArray class]]) problem = "unexpected answer from GitHub";
+            else
+              for (id o in (NSArray*)json) {
+                if (![o isKindOfClass:[NSDictionary class]]) continue;
+                NSDictionary* r = o;
+                auto str = [&](NSString* k) {
+                  id v = r[k];
+                  return [v isKindOfClass:[NSString class]] ? std::string([(NSString*)v UTF8String] ?: "") : std::string();
+                };
+                vc::ReleaseInfo ri;
+                ri.tag = str(@"tag_name");
+                ri.name = str(@"name");
+                ri.url = str(@"html_url");
+                ri.published_at = str(@"published_at");
+                ri.draft = [r[@"draft"] isKindOfClass:[NSNumber class]] && [r[@"draft"] boolValue];
+                ri.prerelease = [r[@"prerelease"] isKindOfClass:[NSNumber class]] && [r[@"prerelease"] boolValue];
+                rels.push_back(ri);
+              }
+          }
+          const vc::UpdateCheck u = problem.empty() ? vc::pick_update(VIRGIL_VERSION, rels) : vc::UpdateCheck();
+          on_main(^{
+            if (quietly && (!problem.empty() || !u.available)) return;
+            [NSApp activateIgnoringOtherApps:YES];
+            NSAlert* a = [[NSAlert alloc] init];
+            if (!problem.empty()) {
+              a.messageText = @"Could not check for updates";
+              a.informativeText = ns(problem + ".");
+              [a addButtonWithTitle:@"OK"];
+              [a runModal];
+              return;
+            }
+            a.messageText = u.available ? @"An update is available" : @"Virgil is up to date";
+            a.informativeText = ns(u.text + (u.available ? "\n\nDownload it from the release page, then install it "
+                                                           "over this version (settings are kept)."
+                                                         : ""));
+            if (u.available) {
+              [a addButtonWithTitle:@"Open release page"];
+              [a addButtonWithTitle:@"Later"];
+            } else {
+              [a addButtonWithTitle:@"OK"];
+            }
+            if ([a runModal] == NSAlertFirstButtonReturn && u.available) {
+              NSString* url = ns(u.latest.url.empty() ? std::string(vc::kUpdateReleasesPage) : u.latest.url);
+              [[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:url]];
+            }
+          });
+        }];
+  [task resume];
+}
+
 - (void)about:(id)sender {
   [NSApp activateIgnoringOtherApps:YES];
   [NSApp orderFrontStandardAboutPanelWithOptions:@{
@@ -910,6 +999,23 @@ RemoteInfo parse_remote(const std::string& status_body) {
     return cb;
   };
 
+  // Wide enough that every checkbox and menu reads in full (at 300 points
+  // the checkbox titles were cut off).
+  const CGFloat kSettingsFieldWidth = 430;
+  // One-click presets: they fill the form, Apply saves it (handlers are set
+  // once the fields exist, below).
+  VCBlockTarget* lowTarget = [[VCBlockTarget alloc] init];
+  VCBlockTarget* wifiTarget = [[VCBlockTarget alloc] init];
+  VCBlockTarget* stdTarget = [[VCBlockTarget alloc] init];
+  NSButton* lowButton = [NSButton buttonWithTitle:@"LowLat mode" target:lowTarget action:@selector(fire:)];
+  NSButton* wifiButton = [NSButton buttonWithTitle:@"Wi-Fi mode" target:wifiTarget action:@selector(fire:)];
+  NSButton* stdButton = [NSButton buttonWithTitle:@"Standard" target:stdTarget action:@selector(fire:)];
+  lowButton.toolTip = @"0.25 ms tick, short packets, 1.25 ms transmit / 1 ms receive latency, 2 ms output margin "
+                      @"(wired network, pro audio apps)";
+  wifiButton.toolTip = @"20 ms both ways, Wi-Fi clock filter, standard packets, 10 ms output margin";
+  stdButton.toolTip = @"The defaults: 4 ms both ways, 1 ms tick, standard packets, 10 ms output margin";
+  NSStackView* presets = [NSStackView stackViewWithViews:@[ lowButton, wifiButton, stdButton ]];
+  presets.spacing = 8;
   NSTextField* name = [NSTextField textFieldWithString:ns(f.name)];
   NSPopUpButton* iface = popup(f.iface_labels(), f.iface_index);
   NSPopUpButton* rate = popup(std::vector<std::string>(vc::kRateLabels, vc::kRateLabels + 4), f.rate_index);
@@ -930,10 +1036,10 @@ RemoteInfo parse_remote(const std::string& status_body) {
   // suggestion, and a button that puts it in the field (Apply still saves
   // it). A vertical stack drops the hidden ones.
   NSTextField* txlWarn = [NSTextField wrappingLabelWithString:@""];
-  txlWarn.preferredMaxLayoutWidth = 300;
+  txlWarn.preferredMaxLayoutWidth = kSettingsFieldWidth;
   txlWarn.font = [NSFont systemFontOfSize:11];
   NSTextField* sugText = [NSTextField wrappingLabelWithString:@""];
-  sugText.preferredMaxLayoutWidth = 300;
+  sugText.preferredMaxLayoutWidth = kSettingsFieldWidth;
   sugText.textColor = [NSColor secondaryLabelColor];
   sugText.font = [NSFont systemFontOfSize:11];
   VCBlockTarget* sugTarget = [[VCBlockTarget alloc] init];
@@ -1013,17 +1119,18 @@ RemoteInfo parse_remote(const std::string& status_body) {
     for (const auto& u : remote.urls) t += "\n" + u;
     t += "\nPlain HTTP: the password crosses the network unencrypted.";
     NSTextField* l = [NSTextField wrappingLabelWithString:ns(t)];
-    l.preferredMaxLayoutWidth = 300;
+    l.preferredMaxLayoutWidth = kSettingsFieldWidth;
     l.selectable = YES;
     l.textColor = [NSColor secondaryLabelColor];
     l.font = [NSFont systemFontOfSize:11];
     remoteInfo = l;
   }
   NSTextField* err = [NSTextField wrappingLabelWithString:@""];
-  err.preferredMaxLayoutWidth = 300;
+  err.preferredMaxLayoutWidth = kSettingsFieldWidth;
   err.textColor = color(vc::color::kBad);
 
   NSGridView* grid = [NSGridView gridViewWithViews:@[
+    @[ label(@"Presets:"), presets ],
     @[ label(@"Name in Dante Controller:"), name ],
     @[ label(@"Network interface:"), iface ],
     @[ label(@"Sample rate:"), rate ],
@@ -1044,7 +1151,7 @@ RemoteInfo parse_remote(const std::string& status_body) {
   ]];
   grid.rowSpacing = 8;
   grid.columnSpacing = 10;
-  [grid columnAtIndex:1].width = 300;
+  [grid columnAtIndex:1].width = kSettingsFieldWidth;
   grid.translatesAutoresizingMaskIntoConstraints = NO;
 
   // Size the dialog for the longest suggestion text (it changes with the
@@ -1108,6 +1215,31 @@ RemoteInfo parse_remote(const std::string& status_body) {
   self.settingsCollect = ^vc::SettingsForm(void) {
     return form();
   };
+  // Presets: fill the fields from the form as it is, changed by the preset.
+  void (^applyPreset)(vc::Preset) = ^(vc::Preset p) {
+    vc::SettingsForm g = form();
+    vc::apply_preset(g, p);
+    [tick selectItemAtIndex:std::min<NSInteger>(vc::tick_index(g), tick.numberOfItems - 1)];
+    [packet selectItemAtIndex:std::min<NSInteger>(vc::packet_index(g), packet.numberOfItems - 1)];
+    [outMargin selectItemAtIndex:std::min<NSInteger>(vc::out_margin_index(g), outMargin.numberOfItems - 1)];
+    rxl.stringValue = ns(g.rx_latency_ms);
+    txl.stringValue = ns(g.tx_latency_ms);
+    wifi.state = g.wifi ? NSControlStateValueOn : NSControlStateValueOff;
+    master.state = g.master_capable ? NSControlStateValueOn : NSControlStateValueOff;
+    tickChanged();
+    txlChanged(txl.stringValue);
+    err.stringValue = @"";
+  };
+  lowTarget.handler = ^(id) {
+    applyPreset(vc::Preset::LowLatency);
+  };
+  wifiTarget.handler = ^(id) {
+    applyPreset(vc::Preset::WiFi);
+  };
+  stdTarget.handler = ^(id) {
+    applyPreset(vc::Preset::Standard);
+  };
+  self.settingsTargets = [self.settingsTargets arrayByAddingObjectsFromArray:@[ lowTarget, wifiTarget, stdTarget ]];
   self.settingsProblem = ^std::string(void) {
     const vc::SettingsForm g = form();
     const std::string latency = vc::tx_latency_problem(g);

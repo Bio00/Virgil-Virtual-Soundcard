@@ -1,6 +1,10 @@
 # Changelog
 
 ## Unreleased
+- **Presets in Settings:** *LowLat mode*, *Wi-Fi mode* and *Standard* fill the form (macOS app and web panel).
+- **Check for Updates** (macOS): from the app menu and the menu bar icon, and once a day at start (only shown when a newer release is out); opens the release page.
+- **Everything in Virgil Control reads in full:** the header subtitle no longer runs under the clock status (shorter wording when the window is narrow); the Settings fields are wider so the checkbox titles are not cut off; the diagnostics list wraps long descriptions instead of cutting them with "…"; the web panel lists hand-edited tick, packet and margin values instead of a blank menu.
+- A transmitter that answers "flow not found" when Virgil stops a flow it no longer needs (it restarted or left) is no longer logged as an error.
 - **Output margin (macOS):** the Core Audio driver's output safety offset was at least 10 ms, which hosts show in their round-trip latency (13 ms in StageRack at the smallest buffer). *Output margin (apps)* in Settings (`output_margin_us`) lowers it for pro audio apps (about 4.6 ms round-trip at 1 ms); the default stays 10 ms for music players. Older drivers and daemons keep 10 ms.
 - **Low latency from Virgil Control:** the mixing tick menu offers 0.25 and 0.125 ms, a *Network packets* menu sets the packet size, and the transmit latency minimum and presets follow them (macOS app and web panel; on Windows and Linux the tick menu). `tx_wake_margin_us` is automatic by default: 0.3 ms with short packets, 1 ms otherwise.
 - **macOS: the Dante network threads run real-time.** Inferno asked for POSIX real-time priorities, which macOS refuses ("flows TX: could not raise the thread priority: PriorityNotInRange(15..=47)" in every log), so the sending and receiving threads ran at normal priority. In a 5-minute test the sending thread woke up to 63 ms late and 27 sends dropped audio; with the Core Audio time-constraint policy they now get, the worst was 0.125 ms and nothing dropped.

@@ -83,6 +83,14 @@ std::string tx_latency_min_text(unsigned tick_us);
 double min_tx_latency_ms(const SettingsForm& f, unsigned tick_us);
 std::vector<std::string> tx_latency_presets(const SettingsForm& f, unsigned tick_us);
 std::string tx_latency_min_text(const SettingsForm& f, unsigned tick_us);
+// One-click presets in Settings. They only fill the form (Apply saves it):
+//  LowLatency: 0.25 ms tick, 16-frame packets, 1.25 ms transmit / 1 ms
+//    receive latency, 2 ms output margin (wired network, pro audio apps).
+//  WiFi: the README's Wi-Fi settings: 1 ms tick, standard packets, 20 ms
+//    both ways, the Wi-Fi clock filter, not clock leader, 10 ms margin.
+//  Standard: the defaults (4 ms both ways, as Dante Virtual Soundcard).
+enum class Preset { LowLatency, WiFi, Standard };
+void apply_preset(SettingsForm& f, Preset p);
 // Why f.tx_latency_ms cannot be saved at f.tick_us, or "".
 std::string tx_latency_problem(const SettingsForm& f);
 // The note for a transmit latency above 40 ms (allowed, up to 200 ms, but

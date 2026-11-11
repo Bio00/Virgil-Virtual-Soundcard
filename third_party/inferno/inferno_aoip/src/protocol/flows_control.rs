@@ -94,6 +94,12 @@ impl FlowsControlClient {
           if resp.opcode2().read() == 1 {
             return Ok(req_resp_packet::View::new(&recvbuf[..recv_size]));
             // creating another View is necessary because https://users.rust-lang.org/t/solved-borrow-doesnt-drop-returning-this-value-requires-that/24182
+          } else if opcode1 == 0x0101 && resp.opcode2().read() == FlowControlError::FlowNotFound as u16 {
+            // Virgil patch: stopping a flow the transmitter no longer has (it
+            // restarted or left the network) is what was wanted; this was
+            // logged as an error each time a transmitter went away.
+            log::info!("flow already stopped on the transmitter");
+            return Ok(req_resp_packet::View::new(&recvbuf[..recv_size]));
           } else {
             error!("server returned error: {}", hex::encode(&resp.into_storage()));
             return Err(Box::new(std::io::Error::from(ErrorKind::InvalidData)));

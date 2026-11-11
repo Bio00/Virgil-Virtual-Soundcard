@@ -80,6 +80,7 @@ button:hover { border-color: var(--muted); }
 button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); font-weight: 600; }
 button.danger { color: var(--bad); }
 button:disabled { opacity: .5; cursor: default; }
+.presets { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 6px; }
 .form { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px 16px; }
 label { display: grid; gap: 4px; font-size: 12.5px; color: var(--muted); }
 input, select, textarea { width: 100%; background: var(--panel-2); border: 1px solid var(--line); border-radius: 7px; padding: 7px 9px; }
@@ -195,6 +196,10 @@ footer { color: var(--muted); font-size: 12px; text-align: center; }
   <section aria-labelledby="h-set" id="settings">
     <div class="head"><h2 id="h-set">Settings</h2><span class="hint" id="cfgpath"></span></div>
     <div class="form">
+      <div class="presets">Presets:
+        <button type="button" data-preset="lowlat" title="0.25 ms tick, short packets, 1.25 ms transmit / 1 ms receive latency, 2 ms output margin (wired network, pro audio apps)">LowLat mode</button>
+        <button type="button" data-preset="wifi" title="20 ms both ways, Wi-Fi clock filter, standard packets, 10 ms output margin">Wi-Fi mode</button>
+        <button type="button" data-preset="standard" title="The defaults: 4 ms both ways, 1 ms tick, standard packets, 10 ms output margin">Standard</button></div>
       <label>Device name<input id="f-name" data-key="name"></label>
       <label>Network interface<select id="f-interface" data-key="interface"></select></label>
       <label>Sample rate<select id="f-rate" data-key="sample_rate">
@@ -477,12 +482,15 @@ function minTxMs(tick) {
   const packetUs = Math.ceil(frames * 1e6 / rate);
   return (tick + packetUs + 250 + margin) / 1000;
 }
-function tickOptions(v) {
-  const sel = $("f-tick");
+// A value from a hand-edited file that the menu does not offer is listed
+// (and kept) until changed, instead of leaving the menu blank.
+function customOption(id, v, label) {
+  const sel = $(id);
   sel.querySelectorAll("option[data-custom]").forEach(o => o.remove());
-  if (v && !["1000", "500", "250", "125"].includes(v) && /^\d+$/.test(v))
-    sel.insertAdjacentHTML("beforeend", `<option value="${esc(v)}" data-custom>${+v / 1000} ms (from the configuration file)</option>`);
+  if (v && /^\d+$/.test(v) && ![...sel.options].some(o => o.value === v))
+    sel.insertAdjacentHTML("beforeend", `<option value="${esc(v)}" data-custom>${esc(label(v))} (from the configuration file)</option>`);
 }
+function tickOptions(v) { customOption("f-tick", v, x => `${+x / 1000} ms`); }
 // The transmit latency suggestion (diagnostics) under the field.
 function renderSug() {
   const tick = formTick(), min = minTxMs(tick);
@@ -546,6 +554,8 @@ function fillForm() {
     if (id === "f-interface") { el.value = S.ifaces.find(i => i.address === cur)?.name ?? cur; continue; }
     const v = getKey(t, el.dataset.section || "device", el.dataset.key);
     if (id === "f-tick") tickOptions(v);
+    if (id === "f-packet") customOption(id, v, x => `${x} frames`);
+    if (id === "f-outmargin") customOption(id, v, x => `${+x / 1000} ms`);
     if (v !== null) toField(el, v);
     else if (DEFAULTS[el.dataset.key] !== undefined) toField(el, DEFAULTS[el.dataset.key]);
   }
@@ -571,6 +581,23 @@ FIELDS.forEach(id => $(id).addEventListener($(id).type === "checkbox" ? "change"
   if (e.target.id === "f-txlat") renderTxWarn();
 }));
 $("cfgtext").addEventListener("input", e => { S.cfg = e.target.value; fillFormFromText(); markDirty(); });
+// Presets (as Virgil Control's, vc::apply_preset): fill the form; Apply saves it.
+// null removes a key (its default).
+const PRESETS = {
+  lowlat: { device: { tick_us: "250", tx_packet_frames: "16", tx_wake_margin_us: null, latency_us: "1000",
+                      tx_latency_us: "1250", output_margin_us: "2000" }, ptp: { wifi: "false" } },
+  wifi: { device: { tick_us: "1000", tx_packet_frames: null, tx_wake_margin_us: null, latency_us: "20000",
+                    tx_latency_us: "20000", output_margin_us: null }, ptp: { wifi: "true", master_capable: "false" } },
+  standard: { device: { tick_us: "1000", tx_packet_frames: null, tx_wake_margin_us: null, latency_us: "4000",
+                        tx_latency_us: "4000", output_margin_us: null }, ptp: { wifi: "false" } },
+};
+document.querySelectorAll("button[data-preset]").forEach(b => b.addEventListener("click", () => {
+  const p = PRESETS[b.dataset.preset];
+  for (const [sec, keys] of Object.entries(p))
+    for (const [k, v] of Object.entries(keys))
+      S.cfg = v === null ? removeKey(S.cfg, sec, k) : setKey(S.cfg, sec, k, v);
+  fillForm(); markDirty();
+}));
 function fillFormFromText() { const keep = $("cfgtext").value; fillForm(); $("cfgtext").value = keep; }
 function say(cls, text) { $("msg").className = "msg" + (cls ? " " + cls : ""); $("msg").textContent = text; }
 // Latency errors from the daemon name the µs keys; show them as the form does.

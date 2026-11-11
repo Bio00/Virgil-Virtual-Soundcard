@@ -148,6 +148,39 @@ std::string tx_latency_min_text(const SettingsForm& f, unsigned tick_us) {
   return "(" + g_text(min_tx_latency_ms(f, tick_us)) + " ms minimum)";
 }
 
+void apply_preset(SettingsForm& f, Preset p) {
+  switch (p) {
+    case Preset::LowLatency:
+      f.tick_us = 250;
+      f.tx_packet_frames = 16;
+      f.tx_wake_margin_us = 0;
+      f.rx_latency_ms = "1";
+      f.tx_latency_ms = "1.25";
+      f.output_margin_us = 2000;
+      f.wifi = false;
+      break;
+    case Preset::WiFi:
+      f.tick_us = 1000;
+      f.tx_packet_frames = 0;
+      f.tx_wake_margin_us = 0;
+      f.rx_latency_ms = "20";
+      f.tx_latency_ms = "20";
+      f.output_margin_us = 10000;
+      f.wifi = true;
+      f.master_capable = false;
+      break;
+    case Preset::Standard:
+      f.tick_us = 1000;
+      f.tx_packet_frames = 0;
+      f.tx_wake_margin_us = 0;
+      f.rx_latency_ms = "4";
+      f.tx_latency_ms = "4";
+      f.output_margin_us = 10000;
+      f.wifi = false;
+      break;
+  }
+}
+
 std::string tx_latency_problem(const SettingsForm& f) {
   char* end = nullptr;
   const double v = std::strtod(f.tx_latency_ms.c_str(), &end);
@@ -220,8 +253,9 @@ SettingsForm load_settings(const std::string& c, const std::vector<Interface>& a
     f.tx_packet_frames = p >= 2 && p <= 32 ? unsigned(p) : 0;
     f.tx_wake_margin_us = w >= 100 && w <= 10000 ? unsigned(w) : 0;
     const std::string om = conf_get(c, "device", "output_margin_us");
-    const unsigned long o = std::strtoul(om.c_str(), nullptr, 10);
-    f.output_margin_us = !om.empty() && o <= 40000 ? unsigned(o) : 10000;
+    char* end = nullptr;
+    const unsigned long o = std::strtoul(om.c_str(), &end, 10);
+    f.output_margin_us = !om.empty() && end != om.c_str() && !*end && o <= 40000 ? unsigned(o) : 10000;
   }
   f.local_clock = lower(conf_get(c, "device", "clock")) == "free";
   f.master_capable = truthy(conf_get(c, "ptp", "master_capable"));

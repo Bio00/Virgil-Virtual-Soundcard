@@ -238,6 +238,22 @@ The same controls are also available in a browser at http://127.0.0.1:8480/
 (*Open control panel in browser* in the menu), which is handy on a headless
 Raspberry Pi over SSH. It also has an editor for the raw configuration file.
 
+
+**Presets** at the top of Settings fill the form in one click (Apply saves
+it):
+
+| Preset | Tick | Packets | Transmit / receive latency | Output margin | Wi-Fi clock filter |
+|---|---|---|---|---|---|
+| LowLat mode | 0.25 ms | 16 frames | 1.25 / 1 ms | 2 ms | off |
+| Wi-Fi mode | 1 ms | standard | 20 / 20 ms | 10 ms | on (and not clock leader) |
+| Standard | 1 ms | standard | 4 / 4 ms | 10 ms | off |
+
+**Updates:** *Check for Updates…* (app menu and menu bar icon, macOS) looks
+at the releases of the repository the build comes from
+(`tools/control_common/update_check.cpp`) and opens the release page when a
+newer one is out; the app also checks once a day at start and only speaks up
+when there is one.
+
 ### Dropouts and diagnostics
 
 Virgil watches for everything that can make audio drop out and keeps a log of

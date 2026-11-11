@@ -4,6 +4,8 @@
 #include <cmath>
 #include <cstdarg>
 #include <cstdio>
+#include <string>
+#include <vector>
 
 namespace vc {
 
@@ -153,17 +155,32 @@ void StatusView::paint(Canvas& c, float W, float H) {
   c.hline(0, W, kHeader - 0.5f, kLine);
   c.logo(Rect{kPad, 16, kPad + 44, 60});
   const float tx = kPad + 58;
-  c.text(s.reachable && !s.name.empty() ? s.name : "Virgil", Font::Title, Rect{tx, 14, W / 2 + 60, 38}, kText,
-         Align::Left);
-  std::string sub = "Virtual Interface Routing Gateway for Inferno-based Low-latency audio";
-  if (s.reachable && !s.address.empty())
-    sub = s.address + fmt("   ·   %.1f kHz   ·   %u out / %u in   ·   %.1f ms", s.rate / 1000.0, s.tx,
-                          s.rx, s.latency_us / 1000.0);
-  c.text(sub, Font::Sub, Rect{tx, 40, W / 2 + 140, 60}, kMuted, Align::Left);
-
+  // The clock state on the right first: the name and subtitle stop before it
+  // (the subtitle ran under it), taking the longest wording that fits.
   const ClockView cv = clock_view(s);
   const float cw = std::max(c.text_width(cv.line1, Font::Label), c.text_width(cv.line2, Font::Sub)) + 24;
   const float cx = W - kPad - cw;
+  const float right = cx - 12;
+  c.text(s.reachable && !s.name.empty() ? s.name : "Virgil", Font::Title, Rect{tx, 14, right, 38}, kText,
+         Align::Left);
+  std::vector<std::string> subs;
+  if (s.reachable && !s.address.empty()) {
+    subs.push_back(s.address + fmt("   ·   %g kHz   ·   %u out / %u in   ·   %g ms", s.rate / 1000.0, s.tx, s.rx,
+                                   s.latency_us / 1000.0));
+    subs.push_back(s.address + fmt(" · %g kHz · %u/%u · %g ms", s.rate / 1000.0, s.tx, s.rx, s.latency_us / 1000.0));
+    subs.push_back(s.address);
+  } else {
+    subs = {"Virtual Interface Routing Gateway for Inferno-based Low-latency audio",
+            "Virtual soundcard for Dante networks", "Dante virtual soundcard"};
+  }
+  std::string sub = subs.back();
+  for (const auto& cand : subs)
+    if (c.text_width(cand, Font::Sub) <= right - tx) {
+      sub = cand;
+      break;
+    }
+  c.text(sub, Font::Sub, Rect{tx, 40, right, 60}, kMuted, Align::Left);
+
   c.dot(cx + 4, cv.line2.empty() ? 38.f : 28.f, 4, cv.color);
   c.text(cv.line1, Font::Label,
          Rect{cx + 16, cv.line2.empty() ? 28.f : 18.f, W - kPad, cv.line2.empty() ? 48.f : 38.f}, kText,

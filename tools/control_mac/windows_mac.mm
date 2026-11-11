@@ -445,8 +445,32 @@ VWDiagnostics* g_diagnostics = nil;  // the open window, if any
     const std::string s = e.duration_text.empty() ? e.text : e.text + " (" + e.duration_text + ")";
     t.stringValue = ns(s);
     t.toolTip = ns(s);
+    // The whole description, on as many lines as it needs (it was cut off
+    // with "…"); the row height follows (heightOfRow).
+    t.lineBreakMode = NSLineBreakByWordWrapping;
+    t.usesSingleLineMode = NO;
+    t.cell.wraps = YES;
+    t.maximumNumberOfLines = 0;
   }
   return t;
+}
+// Rows as tall as their wrapped description.
+- (CGFloat)tableView:(NSTableView*)tableView heightOfRow:(NSInteger)row {
+  if (_events.empty() || row < 0 || size_t(row) >= _events.size()) return 20;
+  const vc::DiagEvent& e = _events[size_t(row)];
+  const std::string s = e.duration_text.empty() ? e.text : e.text + " (" + e.duration_text + ")";
+  NSTableColumn* col = [tableView tableColumnWithIdentifier:@"text"];
+  const CGFloat width = std::max<CGFloat>(60, (col ? col.width : 460) - 6);
+  NSTextField* probe = label("");
+  probe.stringValue = ns(s);
+  probe.lineBreakMode = NSLineBreakByWordWrapping;
+  probe.cell.wraps = YES;
+  const NSSize need = [probe.cell cellSizeForBounds:NSMakeRect(0, 0, width, 10000)];
+  return std::max<CGFloat>(20, std::ceil(need.height) + 4);
+}
+- (void)tableViewColumnDidResize:(NSNotification*)note {
+  if (_events.empty()) return;
+  [_table noteHeightOfRowsWithIndexesChanged:[NSIndexSet indexSetWithIndexesInRange:NSMakeRange(0, _events.size())]];
 }
 - (BOOL)tableView:(NSTableView*)tableView shouldSelectRow:(NSInteger)row {
   return !_events.empty();

@@ -20,6 +20,7 @@
 #include "config_model.h"
 #include "desktop_audio_settings.h"
 #include "diagnostics.h"
+#include "update_check.h"
 #include "diagnostics_model.h"
 #include "remote_auth.h"
 #include "settings_model.h"
@@ -747,6 +748,10 @@ TEST(low_latency_from_settings_and_output_margin) {
   const std::string conf = "[device]\nname = A\ntx_latency_us = 4000\n";
   vc::SettingsForm f = vc::load_settings(conf, {});
   CHECK(vc::packet_index(f) == 0 && vc::out_margin_index(f) == 0 && f.output_margin_us == 10000);
+  // Unreadable or out-of-range values read as the default, not as 0.
+  CHECK(vc::load_settings("[device]\noutput_margin_us = abc\n", {}).output_margin_us == 10000);
+  CHECK(vc::load_settings("[device]\noutput_margin_us = 99999\n", {}).output_margin_us == 10000);
+  CHECK(vc::load_settings("[device]\noutput_margin_us = 0\n", {}).output_margin_us == 0);
   CHECK(vc::packet_labels(f).size() == size_t(vc::kPacketCount));
   f.tick_us = vc::tick_of_index(f, 2);  // 0.25 ms
   f.tx_packet_frames = vc::packet_of_index(f, 1);  // 16
@@ -770,6 +775,45 @@ TEST(low_latency_from_settings_and_output_margin) {
   // Too low for the packet size chosen.
   f.tx_latency_ms = "1";
   CHECK(!vc::tx_latency_problem(f).empty());
+}
+
+TEST(settings_presets_are_valid) {
+  // Every preset, at every sample rate, gives a configuration the daemon accepts.
+  const std::string conf = "[device]\nname = A\n[ptp]\nmaster_capable = true\n";
+  for (vc::Preset p : {vc::Preset::LowLatency, vc::Preset::WiFi, vc::Preset::Standard})
+    for (int rate = 0; rate < 4; ++rate) {
+      vc::SettingsForm f = vc::load_settings(conf, {});
+      f.rate_index = rate;
+      vc::apply_preset(f, p);
+      CHECK(vc::tx_latency_problem(f).empty());
+      Config c;
+      std::string err;
+      CHECK(parse_config(vc::apply_settings(conf, f), &c, &err) && validate_config(&c, &err));
+    }
+  vc::SettingsForm f = vc::load_settings(conf, {});
+  vc::apply_preset(f, vc::Preset::LowLatency);
+  CHECK(f.tick_us == 250 && f.tx_packet_frames == 16 && f.tx_latency_ms == "1.25" && f.output_margin_us == 2000);
+  vc::apply_preset(f, vc::Preset::WiFi);
+  CHECK(f.wifi && !f.master_capable && f.rx_latency_ms == "20" && f.tx_packet_frames == 0 && f.tick_us == 1000);
+  vc::apply_preset(f, vc::Preset::Standard);
+  CHECK(!f.wifi && f.rx_latency_ms == "4" && f.tx_latency_ms == "4" && f.output_margin_us == 10000);
+}
+
+TEST(update_check_picks_newer_release) {
+  std::vector<vc::ReleaseInfo> rels(4);
+  rels[0] = {"v0.8.3-dcfix", "", "u1", "2026-11-11T03:22:49Z", false, true};
+  rels[1] = {"v0.8.3-dcconfig", "", "u2", "2026-11-11T03:23:23Z", false, true};
+  rels[2] = {"v0.8.3-lowlat", "", "u3", "2026-11-11T04:58:00Z", false, true};
+  rels[3] = {"v0.9.0", "", "u4", "2026-12-01T10:00:00Z", true, false};  // a draft: ignored
+  auto u = vc::pick_update("0.8.3-lowlat", rels);
+  CHECK(!u.available && u.known && u.latest.tag == "v0.8.3-lowlat");
+  u = vc::pick_update("0.8.3-dcfix", rels);
+  CHECK(u.available && u.known && u.latest.url == "u3" && u.text.find("0.8.3-lowlat is available") != std::string::npos);
+  u = vc::pick_update("0.8.3-dev", rels);  // built from source
+  CHECK(u.available && !u.known && u.latest.tag == "v0.8.3-lowlat");
+  rels[3].draft = false;  // published
+  CHECK(vc::pick_update("0.8.3-lowlat", rels).available && vc::pick_update("0.8.3-lowlat", rels).latest.tag == "v0.9.0");
+  CHECK(!vc::pick_update("0.8.3", {}).available);
 }
 
 TEST(low_latency_transmit_suggestion) {
