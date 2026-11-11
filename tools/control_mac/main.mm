@@ -722,8 +722,9 @@ RemoteInfo parse_remote(const std::string& status_body) {
   if (self.busy) return;
   NSAlert* a = [[NSAlert alloc] init];
   a.messageText = @"Stop Virgil?";
-  a.informativeText = @"Audio to and from the Dante network stops, Virgil leaves the network and apps cannot use "
-                      @"its soundcard until you start it again. It stays stopped after a restart of the Mac.";
+  a.informativeText = @"Audio to and from the Dante network stops, Virgil leaves the network and the Virgil "
+                      @"Virtual Soundcard disappears from this Mac until you start it again. It stays stopped "
+                      @"after a restart of the Mac.";
   [a addButtonWithTitle:@"Stop"];
   [a addButtonWithTitle:@"Cancel"];
   [NSApp activateIgnoringOtherApps:YES];

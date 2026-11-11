@@ -79,7 +79,9 @@ Stop / Start: *Stop* in Virgil Control (or the tray / menu bar menu, or the
 browser panel) takes Virgil off the network: no Dante device, no network
 ports in use. The service keeps running so the controls keep working, and
 the choice is saved as `enabled = false` in `[device]`, so Virgil stays
-stopped after a restart or reboot until you press *Start*.
+stopped after a restart or reboot until you press *Start*. On macOS the
+Virgil Virtual Soundcard disappears from the Mac's audio devices while Virgil
+is stopped, as Dante Virtual Soundcard's does, and comes back on *Start*.
 
 Latency: Virgil's **receive latency** (`latency_us`, default 4 ms) works like
 the device latency in Dante Controller. Its **transmit latency**

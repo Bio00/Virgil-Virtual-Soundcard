@@ -101,7 +101,16 @@ struct State {
   // Set when a configuration change applied a new format: channel names are
   // announced again for the new channel counts.
   std::atomic<bool> names_dirty{false};
+  // Whether the device exists for the HAL. Like Dante Virtual Soundcard, the
+  // soundcard is there only while Virgil runs: it goes away on Stop in Virgil
+  // Control, or when virgild has been gone for a while (see update_presence).
+  std::atomic<bool> published{false};
 };
+
+// How long the soundcard stays after virgild was last seen running, unless
+// it was stopped from Virgil Control: covers engine restarts for a settings
+// or network change and a crashed virgild that launchd restarts.
+constexpr int64_t kPresenceGraceNs = 15000000000LL;
 
 // Never destroyed: threads that use it (the detached format watcher, a
 // running daemon watcher) may still be alive when the process exits, and
@@ -298,10 +307,25 @@ ULONG Release(void* inDriver) {
 
 void watch_format();
 
+// What virgild says about running, read from its shared memory.
+struct Presence {
+  bool alive = false;    // ticking now
+  bool stopped = false;  // stopped from Virgil Control
+};
+Presence read_presence() {
+  Presence p;
+  virgil::Client c;
+  if (!c.open()) return p;
+  p.alive = c.daemon_alive(1000000000LL);
+  p.stopped = !p.alive && c.header()->run_state.load(std::memory_order_acquire) == virgil::kRunStoppedByUser;
+  return p;
+}
+
 OSStatus Initialize(AudioServerPlugInDriverRef inDriver, AudioServerPlugInHostRef inHost) {
   if (inDriver != gDriverRef) return kAudioHardwareBadObjectError;
   std::lock_guard<std::mutex> l(g.mutex);
   g.host = inHost;
+  g.published = read_presence().alive;
   load_format_from_daemon();
   if (!g.format_watcher) {
     g.format_watcher = true;
@@ -329,6 +353,46 @@ void notify_names(AudioServerPlugInHostRef host) {
   if (!addrs.empty()) host->PropertiesChanged(host, kObjectID_Device, UInt32(addrs.size()), addrs.data());
 }
 
+// Adds or removes the device from the plug-in's device list and tells the
+// host, which then adds or removes it for every app.
+void set_published(bool on) {
+  AudioServerPlugInHostRef host;
+  {
+    std::lock_guard<std::mutex> l(g.mutex);
+    if (g.published.load() == on) return;
+    // Appearing: take virgild's current format right away rather than
+    // showing the old one and changing it through the host a moment later.
+    if (on && g.io_count == 0) {
+      Format f;
+      if (daemon_format(&f)) {
+        if (!(f == current_format())) g.names_dirty = true;
+        apply_format(f);
+      }
+      g.client.close();
+      g.change_requested_ns = 0;
+    }
+    g.published = on;
+    host = g.host;
+  }
+  if (!host) return;
+  const AudioObjectPropertyAddress addrs[] = {
+      {kAudioPlugInPropertyDeviceList, kAudioObjectPropertyScopeGlobal, 0 /* main element */},
+      {kAudioObjectPropertyOwnedObjects, kAudioObjectPropertyScopeGlobal, 0},
+  };
+  host->PropertiesChanged(host, kObjectID_PlugIn, 2, addrs);
+}
+
+// Shows the device while virgild runs. Stop in Virgil Control hides it at
+// once; virgild just gone (restarting the engine, crashed) hides it only
+// after kPresenceGraceNs, so apps keep the device through a restart.
+void update_presence(int64_t* last_alive_ns) {
+  const Presence p = read_presence();
+  const int64_t now = virgil::mono_ns();
+  if (p.alive) *last_alive_ns = now;
+  const bool want = p.alive || (!p.stopped && *last_alive_ns && now - *last_alive_ns < kPresenceGraceNs);
+  set_published(want);
+}
+
 void watch_format() {
   // Names the host can already have read (virgild running when we loaded).
   // Every later change, including virgild first appearing or coming back
@@ -338,8 +402,11 @@ void watch_format() {
     virgil::Client c;
     if (c.open()) names_seq = c.names_seq();
   }
+  int64_t last_alive_ns = g.published.load() ? virgil::mono_ns() : 0;
   while (true) {
     std::this_thread::sleep_for(std::chrono::seconds(1));
+    update_presence(&last_alive_ns);
+    if (!g.published.load()) continue;  // nothing to announce for a hidden device
     {
       virgil::Client c;
       const bool open = c.open();
@@ -514,11 +581,13 @@ OSStatus GetPropertyDataSize(AudioServerPlugInDriverRef inDriver, AudioObjectID 
       *out = sizeof(CFStringRef);
       return kAudioHardwareNoError;
     case kAudioObjectPropertyOwnedObjects:
-      if (id == kObjectID_PlugIn) *out = sizeof(AudioObjectID);
+      if (id == kObjectID_PlugIn) *out = g.published.load() ? sizeof(AudioObjectID) : 0;
       else if (id == kObjectID_Device) *out = scoped_streams(a->mScope, tmp) * sizeof(AudioObjectID);
       else *out = 0;
       return kAudioHardwareNoError;
     case kAudioPlugInPropertyDeviceList:
+      *out = g.published.load() ? sizeof(AudioObjectID) : 0;
+      return kAudioHardwareNoError;
     case kAudioDevicePropertyRelatedDevices:
       *out = sizeof(AudioObjectID);
       return kAudioHardwareNoError;
@@ -573,12 +642,12 @@ OSStatus GetPropertyData(AudioServerPlugInDriverRef inDriver, AudioObjectID id, 
       case kAudioObjectPropertyOwnedObjects:
       case kAudioPlugInPropertyDeviceList: {
         const AudioObjectID dev = kObjectID_Device;
-        return put_ids(inDataSize, outDataSize, outData, &dev, 1);
+        return put_ids(inDataSize, outDataSize, outData, &dev, g.published.load() ? 1 : 0);
       }
       case kAudioPlugInPropertyTranslateUIDToDevice: {
         if (qsize != sizeof(CFStringRef) || !qdata) return kAudioHardwareBadPropertySizeError;
         CFStringRef uid = *static_cast<const CFStringRef*>(qdata);
-        const bool match = uid && CFStringCompare(uid, CFSTR(kDeviceUID), 0) == kCFCompareEqualTo;
+        const bool match = g.published.load() && uid && CFStringCompare(uid, CFSTR(kDeviceUID), 0) == kCFCompareEqualTo;
         return put<AudioObjectID>(inDataSize, outDataSize, outData,
                                   match ? AudioObjectID(kObjectID_Device) : kAudioObjectUnknown);
       }
@@ -639,7 +708,7 @@ OSStatus GetPropertyData(AudioServerPlugInDriverRef inDriver, AudioObjectID id, 
       case kAudioDevicePropertyClockDomain:
         return put<UInt32>(inDataSize, outDataSize, outData, 0);
       case kAudioDevicePropertyDeviceIsAlive:
-        return put<UInt32>(inDataSize, outDataSize, outData, 1);
+        return put<UInt32>(inDataSize, outDataSize, outData, g.published.load() ? 1 : 0);
       case kAudioDevicePropertyDeviceIsRunning:
         return put<UInt32>(inDataSize, outDataSize, outData, g.io_count > 0);
       case kAudioDevicePropertyDeviceCanBeDefaultDevice:

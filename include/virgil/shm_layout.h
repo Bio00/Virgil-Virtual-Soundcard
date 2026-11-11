@@ -43,6 +43,15 @@ enum DaemonState : uint32_t {
   kStatePtpMaster = 3,
 };
 
+// ShmHeader::run_state: whether Virgil is meant to be running. `state` alone
+// cannot tell Stop in Virgil Control (the soundcard should go away) from an
+// engine restart for a settings change (it should stay).
+enum RunState : uint32_t {
+  kRunUnknown = 0,  // older daemon, or the engine has not started yet
+  kRunEnabled = 1,
+  kRunStoppedByUser = 2,
+};
+
 // One per producer of playback audio (an ALSA pcm, the CoreAudio device, an
 // ASIO host). The daemon sums all active slots, so several apps can play at
 // once without a mixer lock.
@@ -78,6 +87,9 @@ struct alignas(64) ShmHeader {
   // Liveness.
   alignas(64) std::atomic<uint32_t> state;
   std::atomic<int64_t> heartbeat_ns;  // daemon mono_ns() at last tick
+  // RunState. In the padding of the liveness line, so no other field moves
+  // and older drivers and daemons still match (they see / write 0).
+  std::atomic<uint32_t> run_state;
 
   // Media clock anchor, guarded by a seqlock (odd = write in progress).
   // media_frame(host_ns) = anchor_frame + (host_ns - anchor_ns) * frames_per_ns
@@ -106,6 +118,8 @@ struct alignas(64) ShmHeader {
 };
 
 static_assert(sizeof(ShmHeader) <= kShmHeaderBytes, "header too large");
+static_assert(offsetof(ShmHeader, clock_seq) == offsetof(ShmHeader, state) + 64,
+              "run_state must stay inside the liveness cache line");
 static_assert(std::atomic<uint64_t>::is_always_lock_free, "need lock-free 64-bit atomics");
 static_assert(std::atomic<int64_t>::is_always_lock_free, "need lock-free 64-bit atomics");
 static_assert(std::atomic<uint32_t>::is_always_lock_free, "need lock-free 32-bit atomics");

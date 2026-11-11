@@ -158,6 +158,11 @@ int run_daemon(virgil::DaemonContext& ctx, void (*on_started)()) {
 
   // The soundcard apps attach to also outlives engine restarts.
   virgil::SharedMemory soundcard;
+  // Tells the macOS driver whether to show the soundcard (see RunState).
+  auto mark_run = [&](uint32_t run) {
+    if (soundcard.is_open() && soundcard.size() >= virgil::kShmHeaderBytes)
+      static_cast<virgil::ShmHeader*>(soundcard.data())->run_state.store(run, std::memory_order_release);
+  };
 
   int rc = 0;
   while (!g_quit) {
@@ -173,6 +178,7 @@ int run_daemon(virgil::DaemonContext& ctx, void (*on_started)()) {
       VIRGIL_LOG_INFO("Virgil is stopped: the audio engine is off and Virgil is not on the Dante network "
                       "(Start in Virgil Control starts it again)");
       set_status("stopped");
+      mark_run(virgil::kRunStoppedByUser);
     }
 
     // At boot the NIC may not have an address yet (DHCP, link): wait for it.
@@ -202,6 +208,7 @@ int run_daemon(virgil::DaemonContext& ctx, void (*on_started)()) {
         VIRGIL_LOG_ERROR("audio engine failed to start: %s", e.what());
       }
       if (started) {
+        mark_run(virgil::kRunEnabled);
         std::lock_guard<std::mutex> l(ctx.mutex);
         ctx.engine = engine.get();
         ctx.cfg = engine->config();  // with defaults filled in by validation

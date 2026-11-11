@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- **macOS: the Virgil Virtual Soundcard is there only while Virgil runs**, as with Dante Virtual Soundcard. *Stop* in Virgil Control (window, menu bar icon or web panel) removes it from the Mac's audio devices at once and *Start* brings it back; if the service is gone (not running, crashed) it disappears after 15 s, so an engine restart for a settings or network change does not take it away from apps. Before, the driver always showed it, silent while Virgil was stopped. Needs the new service and driver together; older drivers keep showing it.
 - **macOS: coreaudiod no longer stays busy after installing.** The installer restarts coreaudiod to load the driver; macOS could then leave its AirPlay helper (AirPlayXPCHelper) re-registering with coreaudiod about 15 times a second, which kept coreaudiod and the system audio services near 100% CPU and made apps such as StageRack hang for ~40 s when opening audio. The installer, the uninstaller and the portable driver installer now restart the AirPlay helper too (launchd relaunches it). Already affected: `sudo killall AirPlayXPCHelper`, or restart the Mac.
 - **Presets in Settings:** *LowLat mode*, *Wi-Fi mode* and *Standard* fill the form (macOS app and web panel).
 - **Check for Updates** (macOS): from the app menu and the menu bar icon, and once a day at start (only shown when a newer release is out); opens the release page.
