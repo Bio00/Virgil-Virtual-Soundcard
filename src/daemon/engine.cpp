@@ -103,7 +103,8 @@ bool Engine::start(std::unique_ptr<ClockSource> clock) {
              old->total_bytes == bytes && old->sample_rate == cfg_.sample_rate &&
              old->tx_channels == cfg_.tx_channels && old->rx_channels == cfg_.rx_channels &&
              old->ring_frames == cfg_.ring_frames && old->period_frames == cfg_.period_frames() &&
-             old->tx_lead_frames == cfg_.tx_lead_frames() && old->rx_latency_frames == cfg_.rx_latency_frames();
+             old->tx_lead_frames == cfg_.tx_lead_frames() && old->rx_latency_frames == cfg_.rx_latency_frames() &&
+             old->out_margin_frames == std::max<uint32_t>(1, cfg_.us_to_frames(cfg_.output_margin_us));
   }
   bool created = reused;
   if (reused) {
@@ -167,6 +168,8 @@ bool Engine::start(std::unique_ptr<ClockSource> clock) {
   hdr_->period_frames = cfg_.period_frames();
   hdr_->rx_latency_frames = cfg_.rx_latency_frames();
   hdr_->tx_lead_frames = cfg_.tx_lead_frames();
+  // Never 0 here: 0 means "an older daemon" (10 ms) to the driver.
+  hdr_->out_margin_frames = std::max<uint32_t>(1, cfg_.us_to_frames(cfg_.output_margin_us));
   std::memset(hdr_->device_name, 0, sizeof hdr_->device_name);
   std::strncpy(hdr_->device_name, cfg_.device_name.c_str(), sizeof hdr_->device_name - 1);
   mix_.assign(size_t(hdr_->period_frames) * std::max(1u, cfg_.tx_channels), 0.f);

@@ -39,6 +39,12 @@ struct Config {
   // (lower transmit latency, more CPU); 125..4000 for hand edits.
   uint32_t tick_us = 1000;
   uint32_t tx_lead_us = 0;         // drivers' playback margin; 0 = two ticks
+  // macOS: the smallest output safety offset the Core Audio driver reports
+  // (it is never below the playback margin + one tick). 10 ms keeps music
+  // players that write ~10 ms buffers at the last moment free of dropouts;
+  // pro audio apps with small buffers and real-time threads can go lower.
+  // macOS reports it as output latency, so a host's round-trip includes it.
+  uint32_t output_margin_us = 10000;
   uint32_t ring_frames = 0;        // 0 = auto
   int rt_priority = 80;
   uint32_t spin_us = 50;
@@ -76,7 +82,10 @@ struct Config {
   // Room for the sending thread to wake late: the smallest transmit latency
   // is the send delay plus this. Lower it only as far as the transmit
   // latency suggestion (which measures this computer) allows.
-  uint32_t tx_wake_margin_us = 1000;
+  // 0 = automatic: 0.3 ms with short packets (the network threads run
+  // real-time; 0.15 ms was the worst seen), 1 ms otherwise.
+  uint32_t tx_wake_margin_us = 0;
+  uint32_t wake_margin_us() const { return tx_wake_margin_us ? tx_wake_margin_us : tx_packet_frames ? 300 : 1000; }
   // false: Virgil is stopped (Stop in Virgil Control): no audio engine, off
   // the Dante network, all its ports free, until started again.
   bool enabled = true;
@@ -114,7 +123,7 @@ struct Config {
   // Smallest transmit latency validate_config accepts: the send delay plus
   // tx_wake_margin_us for the sending thread to wake late (by default 1 ms:
   // 3.5 ms at a 1 ms tick, 2.5 ms at 0.5 ms).
-  uint32_t min_tx_latency_us() const { return tx_send_delay_us() + tx_wake_margin_us; }
+  uint32_t min_tx_latency_us() const { return tx_send_delay_us() + wake_margin_us(); }
   uint32_t tx_lead_frames() const {
     return tx_lead_us ? us_to_frames(tx_lead_us) : 2 * period_frames();
   }

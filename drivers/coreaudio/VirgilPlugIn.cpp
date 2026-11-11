@@ -64,6 +64,8 @@ struct State {
   UInt32 period_frames = 48;
   UInt32 rx_latency_frames = 96;
   UInt32 tx_lead_frames = 96;
+  // Smallest output safety offset from virgild (output_margin_us); 0 = 10 ms.
+  UInt32 out_margin_frames = 0;
   // virgild's shared-memory ring. The zero time stamp period (and with it
   // the largest IO buffer the HAL will use) is a quarter of it, so a whole
   // IO cycle always fits in the ring with room to spare.
@@ -122,10 +124,12 @@ UInt64 ns_to_host(int64_t ns) {
 struct Format {
   Float64 sample_rate;
   UInt32 in_channels, out_channels, period_frames, rx_latency_frames, tx_lead_frames, ring_frames;
+  UInt32 out_margin_frames;
   bool operator==(const Format& o) const {
     return sample_rate == o.sample_rate && in_channels == o.in_channels && out_channels == o.out_channels &&
            period_frames == o.period_frames && rx_latency_frames == o.rx_latency_frames &&
-           tx_lead_frames == o.tx_lead_frames && ring_frames == o.ring_frames;
+           tx_lead_frames == o.tx_lead_frames && ring_frames == o.ring_frames &&
+           out_margin_frames == o.out_margin_frames;
   }
 };
 
@@ -134,12 +138,12 @@ bool daemon_format(Format* f) {
   virgil::Client c;
   if (!c.open() || !c.daemon_alive(1000000000LL)) return false;
   *f = {Float64(c.sample_rate()), c.rx_channels() ? c.rx_channels() : 1, c.tx_channels() ? c.tx_channels() : 1,
-        c.period_frames(), c.rx_latency_frames(), c.tx_lead_frames(), c.ring_frames()};
+        c.period_frames(), c.rx_latency_frames(), c.tx_lead_frames(), c.ring_frames(), c.out_margin_frames()};
   return true;
 }
 Format current_format() {
   return {g.sample_rate,       g.in_channels,    g.out_channels, g.period_frames,
-          g.rx_latency_frames, g.tx_lead_frames, g.ring_frames};
+          g.rx_latency_frames, g.tx_lead_frames, g.ring_frames,  g.out_margin_frames};
 }
 void apply_format(const Format& f) {
   g.sample_rate = f.sample_rate;
@@ -149,6 +153,7 @@ void apply_format(const Format& f) {
   g.rx_latency_frames = f.rx_latency_frames;
   g.tx_lead_frames = f.tx_lead_frames;
   g.ring_frames = f.ring_frames;
+  g.out_margin_frames = f.out_margin_frames;
 }
 // Zero time stamp period; the HAL never uses an IO buffer larger than this.
 UInt32 zero_ts_period() { return std::max<UInt32>(g.ring_frames / 4, 1); }
@@ -159,8 +164,12 @@ UInt32 zero_ts_period() { return std::max<UInt32>(g.ring_frames / 4, 1); }
 // periodic system task) left the tick without audio: 3 ms (two ticks + one)
 // gave dropouts of 3-7 ms every few minutes while playing music. The HAL
 // reports the offset as latency, so apps compensate; tx_lead_us raises it.
+// output_margin_us (virgild) lowers that 10 ms for pro audio apps with small
+// buffers and real-time IO threads; the playback margin + one tick stays the
+// floor, since a cycle written later than that misses the tick that mixes it.
 UInt32 output_safety_frames() {
-  const UInt32 min_frames = UInt32(std::lround(g.sample_rate * 0.010));
+  const UInt32 min_frames =
+      g.out_margin_frames ? g.out_margin_frames : UInt32(std::lround(g.sample_rate * 0.010));
   return std::max<UInt32>(g.tx_lead_frames + g.period_frames, min_frames);
 }
 void load_format_from_daemon() {

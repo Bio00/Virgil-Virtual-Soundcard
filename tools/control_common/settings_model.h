@@ -24,7 +24,9 @@ struct SettingsForm {
   unsigned tick_us = 1000;
   // Low-latency transmit ([device] tx_packet_frames / tx_wake_margin_us),
   // file-only settings: they change the smallest transmit latency.
-  unsigned tx_packet_frames = 0, tx_wake_margin_us = 1000;
+  unsigned tx_packet_frames = 0, tx_wake_margin_us = 0;  // 0 = automatic
+  // macOS: smallest output safety offset ([device] output_margin_us).
+  unsigned output_margin_us = 10000;
   bool local_clock = false;  // clock = free
   bool master_capable = false;
   bool wifi = false;  // [ptp] wifi: the clock filter for Wi-Fi networks
@@ -42,9 +44,26 @@ extern const char* const kRateLabels[4];
 extern const char* const kRxLatencies[9];
 extern const char* const kTxLatencies[7];  // at the 1 ms tick (tx_latency_presets(1000))
 
-// Mixing tick choices: 1 ms (default) and 0.5 ms (lower latency, more CPU).
-extern const unsigned kTicks[2];
-extern const char* const kTickLabels[2];
+// Mixing tick choices: 1 ms (default), 0.5 ms, and for low transmit latency
+// 0.25 and 0.125 ms (more CPU).
+constexpr int kTickCount = 4;
+extern const unsigned kTicks[kTickCount];
+extern const char* const kTickLabels[kTickCount];
+// Network packet size ([device] tx_packet_frames): standard (up to 32
+// frames, 0), short (16) and very short (8) for low transmit latency.
+constexpr int kPacketCount = 3;
+extern const unsigned kPackets[kPacketCount];
+extern const char* const kPacketLabels[kPacketCount];
+std::vector<std::string> packet_labels(const SettingsForm& f);
+int packet_index(const SettingsForm& f);
+unsigned packet_of_index(const SettingsForm& f, int index);
+// macOS output margin ([device] output_margin_us) choices, in us.
+constexpr int kOutMarginCount = 5;
+extern const unsigned kOutMargins[kOutMarginCount];
+extern const char* const kOutMarginLabels[kOutMarginCount];
+std::vector<std::string> out_margin_labels(const SettingsForm& f);
+int out_margin_index(const SettingsForm& f);
+unsigned out_margin_of_index(const SettingsForm& f, int index);
 // Menu entries for `f.tick_us`: kTickLabels, plus "0.25 ms (from the
 // configuration file)" when the file has another value.
 std::vector<std::string> tick_labels(const SettingsForm& f);

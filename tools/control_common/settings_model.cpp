@@ -13,8 +13,15 @@ const char* const kRates[4] = {"44100", "48000", "88200", "96000"};
 const char* const kRateLabels[4] = {"44100 Hz", "48000 Hz", "88200 Hz", "96000 Hz"};
 const char* const kRxLatencies[9] = {"1", "2", "4", "5", "10", "20", "50", "100", "200"};
 const char* const kTxLatencies[7] = {"3.5", "4", "5", "6", "10", "20", "40"};
-const unsigned kTicks[2] = {1000, 500};
-const char* const kTickLabels[2] = {"1 ms (default)", "0.5 ms (lower latency, more CPU)"};
+const unsigned kTicks[kTickCount] = {1000, 500, 250, 125};
+const char* const kTickLabels[kTickCount] = {"1 ms (default)", "0.5 ms (lower latency, more CPU)",
+                                             "0.25 ms (low latency, ~20 % CPU)", "0.125 ms (lowest latency, ~20 % CPU)"};
+const unsigned kPackets[kPacketCount] = {0, 16, 8};
+const char* const kPacketLabels[kPacketCount] = {"Standard (up to 32 frames)", "Short, 16 frames (low latency)",
+                                                 "Very short, 8 frames (lowest latency)"};
+const unsigned kOutMargins[kOutMarginCount] = {10000, 5000, 3000, 2000, 1000};
+const char* const kOutMarginLabels[kOutMarginCount] = {
+    "10 ms (default, safe for music players)", "5 ms", "3 ms", "2 ms (pro audio apps)", "1 ms (pro audio apps, small buffers)"};
 
 namespace {
 
@@ -68,30 +75,61 @@ std::string g_text(double v) {
 
 std::vector<std::string> tick_labels(const SettingsForm& f) {
   std::vector<std::string> out(std::begin(kTickLabels), std::end(kTickLabels));
-  if (tick_index(f) == 2) out.push_back(g_text(f.tick_us / 1000.0) + " ms (from the configuration file)");
+  if (tick_index(f) == kTickCount) out.push_back(g_text(f.tick_us / 1000.0) + " ms (from the configuration file)");
   return out;
 }
 
 int tick_index(const SettingsForm& f) {
-  for (int i = 0; i < 2; ++i)
+  for (int i = 0; i < kTickCount; ++i)
     if (f.tick_us == kTicks[i]) return i;
-  return 2;
+  return kTickCount;
 }
 
 unsigned tick_of_index(const SettingsForm& f, int index) {
-  if (index == 0 || index == 1) return kTicks[index];
+  if (index >= 0 && index < kTickCount) return kTicks[index];
   return f.tick_us;  // the file's own value, kept
+}
+
+// The same pattern for the packet size and the macOS output margin: a value
+// from a hand-edited file is listed (and kept) until changed.
+std::vector<std::string> packet_labels(const SettingsForm& f) {
+  std::vector<std::string> out(std::begin(kPacketLabels), std::end(kPacketLabels));
+  if (packet_index(f) == kPacketCount) out.push_back(std::to_string(f.tx_packet_frames) + " frames (from the configuration file)");
+  return out;
+}
+int packet_index(const SettingsForm& f) {
+  for (int i = 0; i < kPacketCount; ++i)
+    if (f.tx_packet_frames == kPackets[i]) return i;
+  return kPacketCount;
+}
+unsigned packet_of_index(const SettingsForm& f, int index) {
+  return index >= 0 && index < kPacketCount ? kPackets[index] : f.tx_packet_frames;
+}
+std::vector<std::string> out_margin_labels(const SettingsForm& f) {
+  std::vector<std::string> out(std::begin(kOutMarginLabels), std::end(kOutMarginLabels));
+  if (out_margin_index(f) == kOutMarginCount)
+    out.push_back(g_text(f.output_margin_us / 1000.0) + " ms (from the configuration file)");
+  return out;
+}
+int out_margin_index(const SettingsForm& f) {
+  for (int i = 0; i < kOutMarginCount; ++i)
+    if (f.output_margin_us == kOutMargins[i]) return i;
+  return kOutMarginCount;
+}
+unsigned out_margin_of_index(const SettingsForm& f, int index) {
+  return index >= 0 && index < kOutMarginCount ? kOutMargins[index] : f.output_margin_us;
 }
 
 double min_tx_latency_ms(unsigned tick_us) { return min_tx_latency_ms(SettingsForm(), tick_us); }
 
 // As virgil::Config::min_tx_latency_us (checked against it in the unit tests).
 double min_tx_latency_ms(const SettingsForm& f, unsigned tick_us) {
-  if (!f.tx_packet_frames) return (2.0 * tick_us + 500 + f.tx_wake_margin_us) / 1000.0;
+  const unsigned margin = f.tx_wake_margin_us ? f.tx_wake_margin_us : f.tx_packet_frames ? 300 : 1000;
+  if (!f.tx_packet_frames) return (2.0 * tick_us + 500 + margin) / 1000.0;
   const unsigned long long rate = std::strtoull(kRates[f.rate_index >= 0 && f.rate_index < 4 ? f.rate_index : 1],
                                                 nullptr, 10);
   const unsigned packet_us = unsigned((f.tx_packet_frames * 1000000ull + rate - 1) / rate);
-  return (double(tick_us) + packet_us + 250 + f.tx_wake_margin_us) / 1000.0;
+  return (double(tick_us) + packet_us + 250 + margin) / 1000.0;
 }
 
 std::vector<std::string> tx_latency_presets(unsigned tick_us) { return tx_latency_presets(SettingsForm(), tick_us); }
@@ -180,7 +218,10 @@ SettingsForm load_settings(const std::string& c, const std::vector<Interface>& a
     const std::string pf = conf_get(c, "device", "tx_packet_frames"), wm = conf_get(c, "device", "tx_wake_margin_us");
     const unsigned long p = std::strtoul(pf.c_str(), nullptr, 10), w = std::strtoul(wm.c_str(), nullptr, 10);
     f.tx_packet_frames = p >= 2 && p <= 32 ? unsigned(p) : 0;
-    f.tx_wake_margin_us = w >= 100 && w <= 10000 ? unsigned(w) : 1000;
+    f.tx_wake_margin_us = w >= 100 && w <= 10000 ? unsigned(w) : 0;
+    const std::string om = conf_get(c, "device", "output_margin_us");
+    const unsigned long o = std::strtoul(om.c_str(), nullptr, 10);
+    f.output_margin_us = !om.empty() && o <= 40000 ? unsigned(o) : 10000;
   }
   f.local_clock = lower(conf_get(c, "device", "clock")) == "free";
   f.master_capable = truthy(conf_get(c, "ptp", "master_capable"));
@@ -203,6 +244,17 @@ std::string apply_settings(const std::string& conf, const SettingsForm& f) {
   c = conf_set(c, "device", "tx_latency_us", us_text(f.tx_latency_ms));
   // Only written when it changes, so a file without it stays without it.
   if (f.tick_us != conf_tick(conf)) c = conf_set(c, "device", "tick_us", std::to_string(f.tick_us));
+  // Low-latency settings: the default removes the key, other values set it,
+  // an unchanged value leaves the file alone.
+  {
+    const SettingsForm was = load_settings(conf, {});
+    if (f.tx_packet_frames != was.tx_packet_frames)
+      c = f.tx_packet_frames ? conf_set(c, "device", "tx_packet_frames", std::to_string(f.tx_packet_frames))
+                             : conf_remove(c, "device", "tx_packet_frames");
+    if (f.output_margin_us != was.output_margin_us)
+      c = f.output_margin_us != 10000 ? conf_set(c, "device", "output_margin_us", std::to_string(f.output_margin_us))
+                                      : conf_remove(c, "device", "output_margin_us");
+  }
   c = conf_set(c, "device", "clock", f.local_clock ? "free" : "ptp");
   c = conf_set(c, "ptp", "master_capable", f.master_capable ? "true" : "false");
   c = conf_set(c, "ptp", "wifi", f.wifi ? "true" : "false");

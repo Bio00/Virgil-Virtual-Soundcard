@@ -43,7 +43,12 @@ tx_lead_us = 0
 # Room for the sending thread to wake late (us, 100-10000): the smallest
 # transmit latency is the send delay plus this. Lower it only as far as the
 # transmit latency suggestion allows.
-#tx_wake_margin_us = 1000
+# 0 = automatic: 300 with short packets, 1000 otherwise.
+#tx_wake_margin_us = 0
+# macOS: smallest output safety offset of the Core Audio driver (us,
+# 0-40000). Apps count it in their round-trip latency. 10000 keeps music
+# players free of dropouts; pro audio apps with small buffers can go lower.
+#output_margin_us = 10000
 # Real-time scheduling (Linux SCHED_FIFO priority / macOS time-constraint /
 # Windows MMCSS "Pro Audio"). Busy-wait this long before each tick.
 rt_priority = 80

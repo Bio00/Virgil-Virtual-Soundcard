@@ -136,6 +136,7 @@ bool parse_config(const std::string& text, Config* c, std::string* error) {
       else if (key == "tx_latency_us") { if (!need_u32(&c->tx_latency_us)) return false; }
       else if (key == "tick_us") { if (!need_u32(&c->tick_us)) return false; }
       else if (key == "tx_lead_us") { if (!need_u32(&c->tx_lead_us)) return false; }
+      else if (key == "output_margin_us") { if (!need_u32(&c->output_margin_us)) return false; }
       else if (key == "ring_frames") { if (!need_u32(&c->ring_frames)) return false; }
       else if (key == "rt_priority") {
         uint32_t p;
@@ -221,8 +222,8 @@ bool validate_config(Config* c, std::string* error) {
     return fail("transmit latency (tx_latency_us) must be between 0.5 ms and 200 ms");
   if (c->tx_packet_frames != 0 && (c->tx_packet_frames < 2 || c->tx_packet_frames > 32))
     return fail("tx_packet_frames must be 0 (automatic) or between 2 and 32");
-  if (c->tx_wake_margin_us < 100 || c->tx_wake_margin_us > 10000)
-    return fail("tx_wake_margin_us must be between 100 and 10000");
+  if (c->tx_wake_margin_us != 0 && (c->tx_wake_margin_us < 100 || c->tx_wake_margin_us > 10000))
+    return fail("tx_wake_margin_us must be 0 (automatic) or between 100 and 10000");
   if (c->tx_latency_us < c->min_tx_latency_us())
     return fail("transmit latency (tx_latency_us) must be at least " + ms(c->min_tx_latency_us()) +
                 (c->tx_packet_frames ? " (one tick + one packet + " + ms(kTxMixMarginUs) + " + tx_wake_margin_us)"
@@ -263,6 +264,7 @@ bool validate_config(Config* c, std::string* error) {
   }
 
   if (c->tx_lead_us > 40000) return fail("tx_lead_us must be at most 40000");
+  if (c->output_margin_us > 40000) return fail("output_margin_us must be at most 40000 (40 ms)");
   if (c->spin_us >= c->tick_us) return fail("spin_us must be smaller than tick_us");
 
   // Ring: comfortably larger than every latency in play (all bounded above,
@@ -572,13 +574,14 @@ std::string format_config(const Config& c) {
   if (c.ports != "auto") o << "ports = " << c.ports << "\n";
   if (c.process_id != kDefaultProcessId) o << "process_id = " << c.process_id << "\n";
   if (c.tx_packet_frames) o << "tx_packet_frames = " << c.tx_packet_frames << "\n";
-  if (c.tx_wake_margin_us != 1000) o << "tx_wake_margin_us = " << c.tx_wake_margin_us << "\n";
+  if (c.tx_wake_margin_us) o << "tx_wake_margin_us = " << c.tx_wake_margin_us << "\n";
   if (!c.enabled) o << "enabled = false\n";
   o << "control_port = " << c.control_port << "\n";
   if (c.remote_access) o << "remote_access = true\n";
   if (!c.remote_password.empty()) o << "remote_password = \"" << c.remote_password << "\"\n";
   if (c.tick_us != 1000) o << "tick_us = " << c.tick_us << "\n";
   if (c.tx_lead_us) o << "tx_lead_us = " << c.tx_lead_us << "\n";
+  if (c.output_margin_us != 10000) o << "output_margin_us = " << c.output_margin_us << "\n";
   o << "rt_priority = " << c.rt_priority << "\n";
   o << "spin_us = " << c.spin_us << "\n";
   o << "lock_memory = " << (c.lock_memory ? "true" : "false") << "\n";

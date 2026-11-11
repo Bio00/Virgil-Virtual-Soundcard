@@ -45,6 +45,8 @@ class Client {
   uint32_t period_frames() const { return period_; }
   uint32_t rx_latency_frames() const { return rx_lat_; }
   uint32_t tx_lead_frames() const { return tx_lead_; }
+  // Smallest macOS output safety offset (frames); 0 = an older daemon (10 ms).
+  uint32_t out_margin_frames() const { return out_margin_; }
 
   bool anchor(ClockAnchor* out) const { return read_anchor(hdr_, out); }
   // read_anchor gives up when the daemon keeps republishing while we read
@@ -128,7 +130,7 @@ class Client {
   uint64_t mask_ = 0;
   int slot_ = -1;
   std::string open_error_;
-  uint32_t rate_ = 0, txch_ = 0, rxch_ = 0, ring_ = 0, period_ = 0, rx_lat_ = 0, tx_lead_ = 0;
+  uint32_t rate_ = 0, txch_ = 0, rxch_ = 0, ring_ = 0, period_ = 0, rx_lat_ = 0, tx_lead_ = 0, out_margin_ = 0;
 };
 
 std::string default_shm_name();

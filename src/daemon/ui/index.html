@@ -202,9 +202,17 @@ footer { color: var(--muted); font-size: 12px; text-align: center; }
       <label>Playback channels (Dante transmit)<input id="f-txch" data-key="tx_channels" type="number" min="0" max="128"></label>
       <label>Capture channels (Dante receive)<input id="f-rxch" data-key="rx_channels" type="number" min="0" max="128"></label>
       <label>Receive latency (ms)<input id="f-lat" data-key="latency_us" data-conv="ms" type="number" min="0.5" max="200" step="0.5"></label>
-      <label>Transmit latency (ms) <span id="txlat-min"></span><input id="f-txlat" data-key="tx_latency_us" data-conv="ms" type="number" min="3.5" max="200" step="0.5"></label>
+      <label>Transmit latency (ms) <span id="txlat-min"></span><input id="f-txlat" data-key="tx_latency_us" data-conv="ms" type="number" min="3.5" max="200" step="any"></label>
       <label>Mixing tick<select id="f-tick" data-key="tick_us">
-        <option value="1000">1 ms (default)</option><option value="500">0.5 ms (lower latency, more CPU)</option></select></label>
+        <option value="1000">1 ms (default)</option><option value="500">0.5 ms (lower latency, more CPU)</option>
+        <option value="250">0.25 ms (low latency, ~20 % CPU)</option><option value="125">0.125 ms (lowest latency, ~20 % CPU)</option></select></label>
+      <label>Network packets<select id="f-packet" data-key="tx_packet_frames" data-empty-removes="1">
+        <option value="">Standard (up to 32 frames)</option><option value="16">Short, 16 frames (low latency)</option>
+        <option value="8">Very short, 8 frames (lowest latency)</option></select></label>
+      <label>Output margin (apps, macOS)<select id="f-outmargin" data-key="output_margin_us" data-empty-removes="1">
+        <option value="">10 ms (default, safe for music players)</option><option value="5000">5 ms</option>
+        <option value="3000">3 ms</option><option value="2000">2 ms (pro audio apps)</option>
+        <option value="1000">1 ms (pro audio apps, small buffers)</option></select></label>
       <p class="txwarn" id="txwarn" hidden></p>
       <div class="txsug" id="txsug" hidden><span id="txsug-text"></span>
         <button id="txsug-apply" type="button" hidden>Apply suggestion</button></div>
@@ -450,8 +458,9 @@ function render(st) {
 }
 
 // ---------- settings form <-> config text ----------
-const FIELDS = ["f-name", "f-interface", "f-rate", "f-txch", "f-rxch", "f-lat", "f-txlat", "f-tick", "f-clock", "f-master", "f-wifi", "f-remote", "f-rpw"];
+const FIELDS = ["f-name", "f-interface", "f-rate", "f-txch", "f-rxch", "f-lat", "f-txlat", "f-tick", "f-packet", "f-outmargin", "f-clock", "f-master", "f-wifi", "f-remote", "f-rpw"];
 const DEFAULTS = { sample_rate: "48000", clock: "ptp", latency_us: "4000", tx_latency_us: "4000", tick_us: "1000",
+                   tx_packet_frames: "", output_margin_us: "",
                    master_capable: "false", wifi: "false", remote_access: "false", remote_password: "" };
 // Mixing tick: the smallest transmit latency is two ticks + 1.5 ms (3.5 ms at
 // 1 ms, 2.5 ms at 0.5 ms), as the daemon checks it. With tx_packet_frames
@@ -471,7 +480,7 @@ function minTxMs(tick) {
 function tickOptions(v) {
   const sel = $("f-tick");
   sel.querySelectorAll("option[data-custom]").forEach(o => o.remove());
-  if (v && v !== "1000" && v !== "500" && /^\d+$/.test(v))
+  if (v && !["1000", "500", "250", "125"].includes(v) && /^\d+$/.test(v))
     sel.insertAdjacentHTML("beforeend", `<option value="${esc(v)}" data-custom>${+v / 1000} ms (from the configuration file)</option>`);
 }
 // The transmit latency suggestion (diagnostics) under the field.
@@ -552,10 +561,13 @@ function markDirty() {
   if (dirty) { $("msg").className = "msg"; $("msg").textContent = "Unsaved changes."; }
 }
 FIELDS.forEach(id => $(id).addEventListener($(id).type === "checkbox" ? "change" : "input", e => {
-  S.cfg = setKey(S.cfg, e.target.dataset.section || "device", e.target.dataset.key, fromField(e.target));
+  const sec = e.target.dataset.section || "device", val = fromField(e.target);
+  // A default chosen in a menu that removes the key (low-latency settings).
+  S.cfg = val === "" && e.target.dataset.emptyRemoves ? removeKey(S.cfg, sec, e.target.dataset.key)
+                                                      : setKey(S.cfg, sec, e.target.dataset.key, val);
   $("cfgtext").value = S.cfg; markDirty();
   if (/_channels$/.test(e.target.dataset.key)) fillNames();
-  if (e.target.id === "f-tick") renderSug();
+  if (e.target.id === "f-tick" || e.target.id === "f-packet" || e.target.id === "f-rate") renderSug();
   if (e.target.id === "f-txlat") renderTxWarn();
 }));
 $("cfgtext").addEventListener("input", e => { S.cfg = e.target.value; fillFormFromText(); markDirty(); });

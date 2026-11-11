@@ -726,6 +726,52 @@ TEST(low_latency_transmit_config) {
   CHECK(lf.tx_packet_frames == 8 && lf.tx_wake_margin_us == 400 && lf.tick_us == 250);
 }
 
+TEST(low_latency_from_settings_and_output_margin) {
+  std::string err;
+  // Automatic wake margin: 0.3 ms with short packets, 1 ms otherwise.
+  Config a;
+  CHECK(parse_config("[device]\ntick_us = 250\ntx_packet_frames = 16\ntx_latency_us = 1250\n", &a, &err));
+  CHECK(validate_config(&a, &err) && a.wake_margin_us() == 300 && a.min_tx_latency_us() == 1134);
+  Config d;
+  CHECK(parse_config("[device]\n", &d, &err) && validate_config(&d, &err) && d.wake_margin_us() == 1000);
+  CHECK(parse_config("[device]\ntx_wake_margin_us = 0\n", &d, &err) && validate_config(&d, &err));
+  // Output margin: default 10 ms, at most 40 ms, written only when changed.
+  CHECK(d.output_margin_us == 10000 && format_config(d).find("output_margin_us") == std::string::npos);
+  Config o;
+  CHECK(parse_config("[device]\noutput_margin_us = 1500\n", &o, &err) && validate_config(&o, &err));
+  Config ro;
+  CHECK(parse_config(format_config(o), &ro, &err) && ro.output_margin_us == 1500);
+  CHECK(parse_config("[device]\noutput_margin_us = 50000\n", &o, &err) && !validate_config(&o, &err));
+  // Virgil Control: menus for the packet size and the margin; Apply writes
+  // them, the defaults remove them, and the daemon accepts the result.
+  const std::string conf = "[device]\nname = A\ntx_latency_us = 4000\n";
+  vc::SettingsForm f = vc::load_settings(conf, {});
+  CHECK(vc::packet_index(f) == 0 && vc::out_margin_index(f) == 0 && f.output_margin_us == 10000);
+  CHECK(vc::packet_labels(f).size() == size_t(vc::kPacketCount));
+  f.tick_us = vc::tick_of_index(f, 2);  // 0.25 ms
+  f.tx_packet_frames = vc::packet_of_index(f, 1);  // 16
+  f.output_margin_us = vc::out_margin_of_index(f, 3);  // 2 ms
+  f.tx_latency_ms = "1.25";
+  CHECK(vc::tx_latency_problem(f).empty());
+  const std::string out = vc::apply_settings(conf, f);
+  Config c;
+  CHECK(parse_config(out, &c, &err) && validate_config(&c, &err));
+  CHECK(c.tick_us == 250 && c.tx_packet_frames == 16 && c.output_margin_us == 2000 && c.tx_latency_us == 1250);
+  vc::SettingsForm back = vc::load_settings(out, {});
+  CHECK(back.tx_packet_frames == 16 && back.output_margin_us == 2000 && vc::out_margin_index(back) == 3);
+  back.tx_packet_frames = 0;
+  back.output_margin_us = 10000;
+  back.tick_us = 1000;
+  back.tx_latency_ms = "4";
+  const std::string reset = vc::apply_settings(out, back);
+  CHECK(reset.find("tx_packet_frames") == std::string::npos && reset.find("output_margin_us") == std::string::npos);
+  // Unchanged: a file without them stays without them.
+  CHECK(vc::apply_settings(conf, vc::load_settings(conf, {})).find("output_margin") == std::string::npos);
+  // Too low for the packet size chosen.
+  f.tx_latency_ms = "1";
+  CHECK(!vc::tx_latency_problem(f).empty());
+}
+
 TEST(low_latency_transmit_suggestion) {
   // Low-latency mode: 0.25 ms of margin over the worst lag, 0.125 ms steps.
   TxLatencyObservation o;
@@ -2154,7 +2200,7 @@ TEST(config_half_ms_tick) {
 TEST(control_settings_tick_and_tx_suggestion) {
   const std::string conf = "[device]\nname = A\ntx_latency_us = 4000\ntick_us = 1000\n";
   vc::SettingsForm f = vc::load_settings(conf, {});
-  CHECK(f.tick_us == 1000 && vc::tick_index(f) == 0 && vc::tick_labels(f).size() == 2);
+  CHECK(f.tick_us == 1000 && vc::tick_index(f) == 0 && vc::tick_labels(f).size() == size_t(vc::kTickCount));
   CHECK(vc::tick_labels(f)[1] == "0.5 ms (lower latency, more CPU)");
   CHECK(vc::load_settings("[device]\n", {}).tick_us == 1000);
   CHECK(vc::load_settings("[device]\ntick_us = junk\n", {}).tick_us == 1000);
@@ -2194,10 +2240,13 @@ TEST(control_settings_tick_and_tx_suggestion) {
   CHECK(vc::tx_latency_problem(f) == "The transmit latency can be at most 200 ms.");
   f.tx_latency_ms = "x";
   CHECK(!vc::tx_latency_problem(f).empty());
-  // A hand-edited tick is listed and kept.
-  vc::SettingsForm h = vc::load_settings("[device]\ntick_us = 250\n", {});
-  CHECK(vc::tick_index(h) == 2 && vc::tick_labels(h).size() == 3);
-  CHECK(vc::tick_labels(h)[2] == "0.25 ms (from the configuration file)" && vc::tick_of_index(h, 2) == 250);
+  // 0.25 and 0.125 ms are in the menu; another hand-edited tick is listed and kept.
+  vc::SettingsForm q = vc::load_settings("[device]\ntick_us = 250\n", {});
+  CHECK(vc::tick_index(q) == 2 && vc::tick_of_index(q, 3) == 125);
+  vc::SettingsForm h = vc::load_settings("[device]\ntick_us = 300\n", {});
+  CHECK(vc::tick_index(h) == vc::kTickCount && vc::tick_labels(h).size() == size_t(vc::kTickCount) + 1);
+  CHECK(vc::tick_labels(h).back() == "0.3 ms (from the configuration file)" &&
+        vc::tick_of_index(h, vc::kTickCount) == 300);
 
   // The note under the field.
   vc::TxSuggestion s;

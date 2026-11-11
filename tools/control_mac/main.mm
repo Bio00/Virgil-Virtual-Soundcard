@@ -922,6 +922,10 @@ RemoteInfo parse_remote(const std::string& status_body) {
   NSComboBox* txl = combo(vc::kTxLatencies, int(std::size(vc::kTxLatencies)), f.tx_latency_ms);
   NSTextField* txlLabel = label(@"Transmit latency (ms, 3.5 min):");
   NSPopUpButton* tick = popup(vc::tick_labels(f), vc::tick_index(f));
+  // Low transmit latency: packet size; macOS output margin (the safety
+  // offset apps count in their round-trip latency).
+  NSPopUpButton* packet = popup(vc::packet_labels(f), vc::packet_index(f));
+  NSPopUpButton* outMargin = popup(vc::out_margin_labels(f), vc::out_margin_index(f));
   // Above 40 ms, a note on the transmit latency typed; then the daemon's
   // suggestion, and a button that puts it in the field (Apply still saves
   // it). A vertical stack drops the hidden ones.
@@ -961,12 +965,14 @@ RemoteInfo parse_remote(const std::string& status_body) {
   // suggestion (measured at one tick) applies.
   void (^tickChanged)(void) = ^{
     const unsigned t = vc::tick_of_index(f0, int(tick.indexOfSelectedItem));
+    vc::SettingsForm cur = f0;  // the packet size chosen changes the minimum too
+    cur.tx_packet_frames = vc::packet_of_index(f0, int(packet.indexOfSelectedItem));
     NSString* keep = txl.stringValue;
     [txl removeAllItems];
-    for (const auto& v : vc::tx_latency_presets(f0, t)) [txl addItemWithObjectValue:ns(v)];
+    for (const auto& v : vc::tx_latency_presets(cur, t)) [txl addItemWithObjectValue:ns(v)];
     txl.stringValue = keep;
     char min[64];
-    std::snprintf(min, sizeof min, "Transmit latency (ms, %g min):", vc::min_tx_latency_ms(f0, t));
+    std::snprintf(min, sizeof min, "Transmit latency (ms, %g min):", vc::min_tx_latency_ms(cur, t));
     txlLabel.stringValue = [NSString stringWithUTF8String:min];
     const std::string note = vc::tx_suggestion_note(suggestion, t);
     sugText.stringValue = ns(note);
@@ -980,6 +986,8 @@ RemoteInfo parse_remote(const std::string& status_body) {
   };
   tick.target = tickTarget;
   tick.action = @selector(fire:);
+  packet.target = tickTarget;
+  packet.action = @selector(fire:);
   self.settingsTargets = @[ sugTarget, tickTarget, txlWatcher ];
   NSPopUpButton* clock =
       popup({"Follow the Dante clock leader (PTP)", "Local clock only (testing)"}, f.local_clock ? 1 : 0);
@@ -1023,6 +1031,8 @@ RemoteInfo parse_remote(const std::string& status_body) {
     @[ label(@"Receive latency (ms):"), rxl ],
     @[ txlLabel, txl ],
     @[ label(@"Mixing tick:"), tick ],
+    @[ label(@"Network packets:"), packet ],
+    @[ label(@"Output margin (apps):"), outMargin ],
     @[ [NSGridCell emptyContentView], sugBox ],
     @[ label(@"Clock:"), clock ],
     @[ [NSGridCell emptyContentView], master ],
@@ -1086,6 +1096,8 @@ RemoteInfo parse_remote(const std::string& status_body) {
     g.rx_latency_ms = rxl.stringValue.UTF8String ?: "4";
     g.tx_latency_ms = txl.stringValue.UTF8String ?: "4";
     g.tick_us = vc::tick_of_index(f0, int(tick.indexOfSelectedItem));
+    g.tx_packet_frames = vc::packet_of_index(f0, int(packet.indexOfSelectedItem));
+    g.output_margin_us = vc::out_margin_of_index(f0, int(outMargin.indexOfSelectedItem));
     g.local_clock = clock.indexOfSelectedItem == 1;
     g.master_capable = master.state == NSControlStateValueOn;
     g.wifi = wifi.state == NSControlStateValueOn;

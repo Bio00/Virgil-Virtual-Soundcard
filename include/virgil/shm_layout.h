@@ -70,7 +70,9 @@ struct alignas(64) ShmHeader {
   uint32_t period_frames;      // daemon tick
   uint32_t rx_latency_frames;  // capture reads lag the media clock by this
   uint32_t tx_lead_frames;     // playback writes lead the media clock by this
-  uint32_t reserved0;
+  // macOS Core Audio driver: the smallest output safety offset (frames),
+  // from [device] output_margin_us; 0 (written by older daemons) = 10 ms.
+  uint32_t out_margin_frames;
   char device_name[64];
 
   // Liveness.

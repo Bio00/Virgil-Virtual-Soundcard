@@ -61,7 +61,7 @@ bool Client::open(const std::string& name) {
   struct Layout {
     uint32_t magic, version;
     uint64_t total_bytes;
-    uint32_t rate, tx, rx, ring, period, rx_lat, tx_lead;
+    uint32_t rate, tx, rx, ring, period, rx_lat, tx_lead, out_margin;
   } v;
   {
     volatile const ShmHeader* vh = h;
@@ -75,6 +75,7 @@ bool Client::open(const std::string& name) {
     v.period = vh->period_frames;
     v.rx_lat = vh->rx_latency_frames;
     v.tx_lead = vh->tx_lead_frames;
+    v.out_margin = vh->out_margin_frames;
   }
   if (v.magic != kShmMagic) {
     shm_.close();
@@ -105,6 +106,8 @@ bool Client::open(const std::string& name) {
   period_ = v.period;
   rx_lat_ = v.rx_lat;
   tx_lead_ = v.tx_lead;
+  // Hint only (macOS output safety offset); kept within the ring.
+  out_margin_ = std::min(v.out_margin, ring_ / 4);
   mask_ = ring_ - 1;
   rx_ = rx_ring_at(h, ring_, txch_);
   return true;

@@ -318,8 +318,11 @@ configuration file.
 ### Low transmit latency (experimental)
 
 The classic send delay (two ticks + 0.5 ms) assumes 32-frame packets and
-leaves 1 ms for the sending thread to wake late. Three settings in `[device]`
-(configuration file only) bring the transmit latency down to about 1 ms:
+leaves 1 ms for the sending thread to wake late. These settings bring the
+transmit latency down to about 1 ms. In Virgil Control's Settings (and the
+web panel): *Mixing tick* 0.25 or 0.125 ms, *Network packets* Short or Very
+short, then the transmit latency (its minimum follows them). In the
+configuration file, in `[device]`:
 
 * `tx_packet_frames`: the largest packet Virgil sends (2-32 frames). A packet
   can only go out once its last frame is mixed, so shorter packets go out
@@ -329,7 +332,8 @@ leaves 1 ms for the sending thread to wake late. Three settings in `[device]`
   silicon Mac, measured; the busy-wait before each tick is capped at a fifth
   of the tick).
 * `tx_wake_margin_us`: room for the sending thread to wake late (default
-  1000). The smallest transmit latency is the send delay plus this.
+  automatic: 0.3 ms with short packets, 1 ms otherwise). The smallest
+  transmit latency is the send delay plus this.
 
 Virgil Control and the web panel follow these for the minimum and the
 presets. In this mode the transmit latency suggestion uses 0.25 ms of margin
@@ -351,9 +355,20 @@ For example (48 kHz):
 [device]
 tick_us = 250
 tx_packet_frames = 16
-tx_wake_margin_us = 300
 tx_latency_us = 1250
 ```
+
+**Output margin (macOS).** Apps add up the latencies the Core Audio driver
+reports to show a round-trip latency, and the driver's output safety offset
+is at least 10 ms: Apple Music and similar players write ~10 ms buffers at
+the last moment, and less margin gave them dropouts. A pro audio app with
+small buffers and real-time threads does not need it: *Output margin (apps)*
+in Settings (`output_margin_us`, 0-40000, default 10000) lowers it. It is
+never below the playback margin + one tick. Measured round-trip a host shows
+at 48 kHz, 0.5 ms tick, 1 ms receive latency, smallest IO buffer:
+13.1 ms with the 10 ms default, about 4.6 ms at 1 ms. That is the computer's
+part only: the network adds the transmit latency and the receiver's
+latency. Lower it step by step and keep it where playback has no dropouts.
 
 Shorter packets mean more of them (16 frames at 48 kHz: 3000 per second
 per flow; 8 frames: 6000), so check the receiving devices accept the size:

@@ -294,7 +294,7 @@ void Diagnostics::engine_started(const Config& cfg, int64_t now) {
   // does not carry over. A new transmit latency keeps it.
   tx_tick_us_ = cfg.tick_us;
   tx_send_delay_us_ = cfg.tx_packet_frames ? cfg.tx_send_delay_us() : 0;
-  tx_min_us_ = cfg.tx_packet_frames || cfg.tx_wake_margin_us != 1000 ? cfg.min_tx_latency_us() : 0;
+  tx_min_us_ = cfg.tx_packet_frames || cfg.tx_wake_margin_us ? cfg.min_tx_latency_us() : 0;
   tx_fine_ = cfg.tx_packet_frames != 0;
   if (tx_obs_.tick_us != cfg.tick_us || tx_obs_.send_delay_us != tx_send_delay_us_ || tx_obs_.fine != tx_fine_)
     reset_tx_observation_locked(cfg.tick_us);
