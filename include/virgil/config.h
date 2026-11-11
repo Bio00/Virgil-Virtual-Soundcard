@@ -12,6 +12,10 @@ namespace virgil {
 // receiving side has to buffer that much (see dante_*_ring_frames).
 constexpr uint32_t kMaxLatencyUs = 200000;
 
+// Default Dante process id (see Config::process_id): not 0, which Dante
+// software on the same computer uses for itself.
+constexpr uint32_t kDefaultProcessId = 86;  // 'V'
+
 struct Config {
   std::string device_name = "Virgil";  // name in Dante Controller (<= 31 chars)
   std::string interface;  // name or IPv4 of the Dante network NIC; empty = first active
@@ -54,6 +58,12 @@ struct Config {
   // Dante software on this computer, e.g. Dante Controller, already uses
   // them), "standard", or the first of four alternative ports.
   std::string ports = "auto";
+  // Dante process id: the last two bytes of the Dante device id, after the
+  // adapter's MAC address. Dante software on this computer (Dante
+  // Controller's ConMon service, Dante Virtual Soundcard) identifies itself
+  // as MAC + 0000; a Virgil with process id 0 had that same id, and Dante
+  // Controller on this computer never talked to it. 0 = the old id.
+  uint32_t process_id = kDefaultProcessId;
   // false: Virgil is stopped (Stop in Virgil Control): no audio engine, off
   // the Dante network, all its ports free, until started again.
   bool enabled = true;

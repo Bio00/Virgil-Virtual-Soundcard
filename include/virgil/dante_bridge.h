@@ -33,6 +33,9 @@ typedef struct VgDanteConfig {
   // First of four alternative control ports (ARC, CMC, flow control, info),
   // or 0 for the standard Dante ports. Dante Controller finds them by mDNS.
   uint16_t alt_port;
+  // Dante process id: the last two bytes of the device id (after the MAC
+  // address). Not 0, which Dante software on the same computer uses.
+  uint16_t process_id;
 } VgDanteConfig;
 
 typedef struct VgDanteRxStats {

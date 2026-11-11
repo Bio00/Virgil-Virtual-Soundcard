@@ -1,5 +1,9 @@
 cmake_minimum_required(VERSION 3.16)
 project(virgil VERSION 0.8.3 LANGUAGES C CXX)
+# Marks a patched build in the version Virgil shows (e.g. -DVIRGIL_VERSION_SUFFIX=-dcfix
+# shows 0.8.3-dcfix); the numeric version used by packages and bundles stays.
+set(VIRGIL_VERSION_SUFFIX "" CACHE STRING "text appended to the version Virgil shows")
+set(VIRGIL_VERSION_STRING "${PROJECT_VERSION}${VIRGIL_VERSION_SUFFIX}")
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -81,7 +85,7 @@ endif()
 add_executable(virgild src/daemon/main.cpp src/daemon/control.cpp src/daemon/diagnostics.cpp src/daemon/http_server.cpp src/daemon/remote_auth.cpp
                     ${VIRGIL_UI_HEADER} ${VIRGIL_ICON_SOURCES})
 target_include_directories(virgild PRIVATE ${CMAKE_BINARY_DIR}/generated)
-target_compile_definitions(virgild PRIVATE VIRGIL_VERSION="${PROJECT_VERSION}")
+target_compile_definitions(virgild PRIVATE VIRGIL_VERSION="${VIRGIL_VERSION_STRING}")
 target_link_libraries(virgild PRIVATE virgil_net)
 
 add_executable(virgil-latency-probe tools/virgil_latency_probe.cpp)
@@ -123,7 +127,7 @@ if(APPLE)
                  tools/control_common/diagnostics_model.cpp tools/control_common/config_model.cpp
                  tools/control_common/view.cpp branding/virgil.icns branding/virgil-256.png)
   target_include_directories(virgil-control PRIVATE tools/control_common tools/control_mac)
-  target_compile_definitions(virgil-control PRIVATE VIRGIL_VERSION="${PROJECT_VERSION}")
+  target_compile_definitions(virgil-control PRIVATE VIRGIL_VERSION="${VIRGIL_VERSION_STRING}")
   target_compile_options(virgil-control PRIVATE $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>)
   target_link_libraries(virgil-control PRIVATE virgil_desktop_audio "-framework AppKit"
                         "-framework UserNotifications" "-framework CoreAudio")
@@ -179,7 +183,7 @@ else()
                  tools/control_common/diagnostics_model.cpp tools/control_common/config_model.cpp
                    tools/control_common/view.cpp)
     target_include_directories(virgil-control PRIVATE tools/control_common tools/control_linux)
-    target_compile_definitions(virgil-control PRIVATE VIRGIL_VERSION="${PROJECT_VERSION}")
+    target_compile_definitions(virgil-control PRIVATE VIRGIL_VERSION="${VIRGIL_VERSION_STRING}")
     target_link_libraries(virgil-control PRIVATE PkgConfig::GTK3 virgil_desktop_audio ${CMAKE_DL_LIBS})
   else()
     message(STATUS "GTK 3 not found: virgil-control opens the browser control panel")

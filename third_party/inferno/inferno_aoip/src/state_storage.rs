@@ -27,18 +27,22 @@ impl StateStorage {
       .unwrap_or_else(|| std::env::temp_dir().join("inferno_aoip"));
     let dir_for = |id: &[u8]| base.to_string_lossy().into_owned() + MAIN_SEPARATOR_STR + &hex::encode(id);
     let dir = dir_for(&self_info.factory_device_id);
-    // Virgil patch: device ids used to be built from the IP address; carry
-    // the state saved under that id over to the MAC-based one.
-    let mut legacy = [0u8; 8];
-    legacy[2..6].copy_from_slice(&self_info.ip_address.octets());
-    legacy[6..8].copy_from_slice(&self_info.process_id.to_be_bytes());
-    let legacy_dir = dir_for(&legacy);
-    if legacy_dir != dir && !std::path::Path::new(&dir).exists() && std::path::Path::new(&legacy_dir).is_dir() {
-      match std::fs::rename(&legacy_dir, &dir) {
-        Ok(()) => info!("moved saved state from {legacy_dir}"),
-        Err(e) => warn!("could not move saved state from {legacy_dir}: {e}"),
-      }
+    // Virgil patch: carry state saved under an older device id over to the
+    // current one. Ids used to be built from the IP address, then from the MAC
+    // address with process id 0 (which Dante software on the same computer
+    // uses for itself); newest first.
+    let mut legacy_ids = Vec::new();
+    let mut mac_zero = self_info.factory_device_id;
+    mac_zero[6..8].copy_from_slice(&[0, 0]);
+    legacy_ids.push(mac_zero);
+    for pid in [self_info.process_id, 0] {
+      let mut ip_based = [0u8; 8];
+      ip_based[2..6].copy_from_slice(&self_info.ip_address.octets());
+      ip_based[6..8].copy_from_slice(&pid.to_be_bytes());
+      legacy_ids.push(ip_based);
     }
+    let legacy_dirs: Vec<String> = legacy_ids.iter().map(|id| dir_for(id)).collect();
+    migrate_legacy_state(&dir, &legacy_dirs);
     create_dir_all(&dir).log_and_forget();
     info!("using state directory: {dir}");
     Self { path_prefix: dir + MAIN_SEPARATOR_STR }
@@ -63,6 +67,30 @@ impl StateStorage {
   }
 }
 
+/// Virgil patch: when `dir` does not exist yet, rename the first of
+/// `legacy_dirs` that does into it. Returns the one moved, if any.
+fn migrate_legacy_state(dir: &str, legacy_dirs: &[String]) -> Option<String> {
+  if std::path::Path::new(dir).exists() {
+    return None;
+  }
+  for legacy_dir in legacy_dirs {
+    if legacy_dir == dir || !std::path::Path::new(legacy_dir).is_dir() {
+      continue;
+    }
+    return match std::fs::rename(legacy_dir, dir) {
+      Ok(()) => {
+        info!("moved saved state from {legacy_dir}");
+        Some(legacy_dir.clone())
+      }
+      Err(e) => {
+        warn!("could not move saved state from {legacy_dir}: {e}");
+        None
+      }
+    };
+  }
+  None
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -79,6 +107,45 @@ mod tests {
   struct TestConfig {
     name: String,
     count: u32,
+  }
+
+  fn temp_base(tag: &str) -> std::path::PathBuf {
+    let ts = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    let base = std::env::temp_dir().join(format!("inferno_aoip_migrate_{tag}_{ts}"));
+    std::fs::create_dir_all(&base).unwrap();
+    base
+  }
+
+  #[test]
+  fn migrates_first_existing_legacy_dir() {
+    let base = temp_base("first");
+    let p = |n: &str| base.join(n).to_string_lossy().into_owned();
+    std::fs::create_dir_all(p("mac0")).unwrap();
+    std::fs::write(base.join("mac0").join("rx.toml"), "x = 1").unwrap();
+    std::fs::create_dir_all(p("ip")).unwrap();
+    let moved = migrate_legacy_state(&p("new"), &[p("missing"), p("mac0"), p("ip")]);
+    assert_eq!(moved, Some(p("mac0")));
+    assert!(base.join("new").join("rx.toml").exists());
+    assert!(!base.join("mac0").exists());
+    assert!(base.join("ip").exists());
+  }
+
+  #[test]
+  fn does_not_migrate_over_existing_state() {
+    let base = temp_base("existing");
+    let p = |n: &str| base.join(n).to_string_lossy().into_owned();
+    std::fs::create_dir_all(p("new")).unwrap();
+    std::fs::create_dir_all(p("mac0")).unwrap();
+    assert_eq!(migrate_legacy_state(&p("new"), &[p("mac0")]), None);
+    assert!(base.join("mac0").exists());
+  }
+
+  #[test]
+  fn nothing_to_migrate() {
+    let base = temp_base("none");
+    let p = |n: &str| base.join(n).to_string_lossy().into_owned();
+    assert_eq!(migrate_legacy_state(&p("new"), &[p("new"), p("missing")]), None);
+    assert!(!base.join("new").exists());
   }
 
   #[test]

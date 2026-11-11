@@ -49,6 +49,12 @@ clock = ptp
 # Virtual Soundcard) already uses them, then 24440-24443; standard; or the
 # first of four ports to use. Dante Controller finds them either way.
 ports = auto
+# Dante process id (0-65535): the last part of Virgil's Dante device id, which
+# is the network adapter's MAC address plus this number. Keep it away from 0:
+# Dante software on this computer (Dante Controller, Dante Virtual Soundcard)
+# uses MAC + 0 for itself, and with the same id Dante Controller on this
+# computer does not see Virgil. Two Virgils on one computer need different ones.
+#process_id = 86
 # Web control panel port (0 = off). Only this computer can reach it unless
 # remote_access is on.
 control_port = 8480

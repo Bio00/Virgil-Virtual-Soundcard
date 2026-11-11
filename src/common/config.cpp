@@ -150,6 +150,10 @@ bool parse_config(const std::string& text, Config* c, std::string* error) {
       else if (key == "control_port") { if (!to_u32(val, &u) || u > 65535) return fail("bad control_port"); c->control_port = u; }
       else if (key == "clock") c->clock = lower(val);
       else if (key == "ports") c->ports = lower(val);
+      else if (key == "process_id") {
+        if (!to_u32(val, &u) || u > 65535) return fail("process_id must be a number between 0 and 65535");
+        c->process_id = u;
+      }
       else if (key == "enabled") { if (!need_bool(&c->enabled)) return false; }
       else if (key == "packet_time_us" || key == "sap") legacy();
       else return fail("unknown key '" + key + "'");
@@ -534,6 +538,7 @@ std::string format_config(const Config& c) {
   o << "tx_latency_us = " << c.tx_latency_us << "\n";
   o << "clock = " << c.clock << "\n";
   if (c.ports != "auto") o << "ports = " << c.ports << "\n";
+  if (c.process_id != kDefaultProcessId) o << "process_id = " << c.process_id << "\n";
   if (!c.enabled) o << "enabled = false\n";
   o << "control_port = " << c.control_port << "\n";
   if (c.remote_access) o << "remote_access = true\n";

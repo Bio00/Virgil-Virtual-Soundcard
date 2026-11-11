@@ -649,6 +649,26 @@ TEST(config_format_roundtrip) {
   CHECK(format_config(a) == format_config(b));
 }
 
+TEST(config_process_id) {
+  // Not 0 by default: Dante software on the same computer is MAC + 0000, and
+  // Dante Controller there ignored a Virgil with that device id.
+  Config d;
+  std::string err;
+  CHECK(parse_config("[device]\n", &d, &err));
+  CHECK(d.process_id == kDefaultProcessId && kDefaultProcessId != 0);
+  CHECK(format_config(d).find("process_id") == std::string::npos);
+  Config c;
+  CHECK(parse_config("[device]\nprocess_id = 7\n", &c, &err) && validate_config(&c, &err));
+  CHECK(c.process_id == 7);
+  Config r;
+  CHECK(parse_config(format_config(c), &r, &err) && r.process_id == 7);
+  Config z;
+  CHECK(parse_config("[device]\nprocess_id = 0\n", &z, &err) && z.process_id == 0);
+  Config bad;
+  CHECK(!parse_config("[device]\nprocess_id = 65536\n", &bad, &err));
+  CHECK(!parse_config("[device]\nprocess_id = x\n", &bad, &err));
+}
+
 TEST(control_conf_aliases_and_last_wins) {
   // Virgil Control reads the file as the daemon does.
   const std::string t =

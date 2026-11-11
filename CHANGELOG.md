@@ -1,5 +1,8 @@
 # Changelog
 
+## Unreleased
+- **Dante Controller on the same computer sees Virgil again** (a regression in 0.7.x, found on macOS). Since Virgil's Dante device id comes from the network adapter's MAC address, it was MAC + process id 0000, the id Dante software on that computer (Dante Controller's ConMon service, Dante Virtual Soundcard) uses for itself. Dante Controller there found Virgil by mDNS but never sent it a request ("Timed out 3 times awaiting a reply to message 'Versions'" in its log); Dante Controller on other computers was not affected. Virgil now uses process id 86, so its id is MAC + 0056. The receive subscriptions and channel names saved under the old id are moved over on the first start, so nothing needs re-patching; other devices' subscriptions to Virgil follow its name and keep working. `process_id` in `[device]` sets another one (0 = the old id; two Virgils on one computer need different ones).
+
 ## 0.8.3
 From network fuzzing (9.2 million packets on every Dante port and PTP, also under AddressSanitizer: no memory-safety problems) and monkey testing of the control panel, its API, the configuration and the web panel (no crashes, hangs or leaks); these are their fixes, together with the ones since 0.8.2.
 - **No more engine restart from a failed flow request after an unsubscribe.** If a receive channel was unsubscribed while Virgil was still asking the transmitter for its audio, and that request then failed, the Dante stack crashed and restarted (2-3 s without audio on every channel). Found by network fuzzing; the exact sequence no longer crashes it.

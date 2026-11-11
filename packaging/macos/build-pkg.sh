@@ -1,6 +1,8 @@
 #!/bin/sh
 # Build Virgil-<version>-macos.pkg (universal arm64 + x86_64) into ./dist.
 #   packaging/macos/build-pkg.sh
+# VIRGIL_BUILD_SUFFIX=-dcfix marks a patched build: Virgil-<version>-dcfix-macos.pkg,
+# and Virgil shows version <version>-dcfix.
 # Optional signing / notarisation (Apple Developer ID):
 #   VIRGIL_CODESIGN_ID="Developer ID Application: ..."   signs virgild + the driver
 #   VIRGIL_INSTALLER_ID="Developer ID Installer: ..."    signs the .pkg
@@ -12,9 +14,11 @@ set -eu
 cd "$(dirname "$0")/../.."
 build=build-macos-release
 cmake -S . -B "$build" -DCMAKE_BUILD_TYPE=Release -DVIRGIL_BUILD_TESTS=OFF \
-	-DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
+	-DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 \
+	-DVIRGIL_VERSION_SUFFIX="${VIRGIL_BUILD_SUFFIX:-}"
 cmake --build "$build" -j
 version=$(sed -n 's/^CMAKE_PROJECT_VERSION:STATIC=//p' "$build/CMakeCache.txt")
+label="$version${VIRGIL_BUILD_SUFFIX:-}"
 
 stage=$(mktemp -d)
 root="$stage/root"
@@ -58,7 +62,7 @@ pkgbuild --root "$root" --scripts packaging/macos/scripts --component-plist "$st
 	--ownership recommended "$stage/virgil-component.pkg"
 
 mkdir -p dist
-out="dist/Virgil-$version-macos.pkg"
+out="dist/Virgil-$label-macos.pkg"
 productbuild --distribution packaging/macos/distribution.xml \
 	--resources packaging/macos/resources --package-path "$stage" \
 	${VIRGIL_INSTALLER_ID:+--sign "$VIRGIL_INSTALLER_ID"} "$out"
@@ -69,14 +73,14 @@ if [ -n "${VIRGIL_NOTARY_PROFILE:-}" ]; then
 	xcrun stapler staple "$out"
 fi
 # Portable zip: driver + daemon + Virgil Control.app in one folder.
-port="$stage/Virgil-$version-macos"
+port="$stage/Virgil-$label-macos"
 mkdir -p "$port"
 cp "$root/usr/local/bin/virgild" "$root/usr/local/bin/virgil-latency-probe" "$port/"
 cp -R "$root/Applications/Virgil Control.app" "$root/Library/Audio/Plug-Ins/HAL/VirgilAudio.driver" "$port/"
 cp packaging/virgil.conf "$port/virgil.conf"
 cp README.md LICENSE NOTICE.md config/virgil.conf.example packaging/portable/macos/START-HERE.txt "$port/"
 install -m 755 packaging/portable/macos/install-driver.command "$port/"
-ditto -c -k --sequesterRsrc --keepParent "$port" "dist/Virgil-$version-macos-portable.zip"
+ditto -c -k --sequesterRsrc --keepParent "$port" "dist/Virgil-$label-macos-portable.zip"
 
 rm -rf "$stage"
-ls -l "$out" "dist/Virgil-$version-macos-portable.zip"
+ls -l "$out" "dist/Virgil-$label-macos-portable.zip"

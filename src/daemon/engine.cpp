@@ -247,6 +247,7 @@ bool Engine::start(std::unique_ptr<ClockSource> clock) {
       alt_port_ = uint16_t(std::atoi(cfg_.ports.c_str()));
     }
     dc.alt_port = alt_port_;
+    dc.process_id = uint16_t(cfg_.process_id);
     {
       std::lock_guard<std::mutex> l(g_engine_mutex);
       g_engine = this;

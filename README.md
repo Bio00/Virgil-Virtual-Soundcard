@@ -102,7 +102,10 @@ ports.
 Dante Controller can run on the same computer as Virgil. Its background
 service listens on the standard Dante control ports, so Virgil then moves to
 24440–24443 (it says so in the log) and Dante Controller finds it there by
-itself. The same applies to Dante Virtual Soundcard, but the two cannot run
+itself. That service also uses the Dante device id *MAC address + 0000* for
+the computer, so Virgil's id is the adapter's MAC address plus process id
+86 (`process_id` in `[device]`): with the same id, Dante Controller on that
+computer would find Virgil but never talk to it. The same applies to Dante Virtual Soundcard, but the two cannot run
 at once: both need the PTP clock ports 319/320.
 
 ## Architecture
