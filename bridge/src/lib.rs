@@ -43,6 +43,7 @@ pub struct VgDanteConfig {
     rx_names: *const *const c_char,
     alt_port: u16,
     process_id: u16,
+    tx_max_fpp: u16,
 }
 
 struct Handle {
@@ -510,6 +511,8 @@ pub unsafe extern "C" fn vg_dante_start(config: *const VgDanteConfig) -> *mut st
     // 0000; with the same id, Dante Controller here never asked Virgil
     // anything ("Timed out awaiting a reply to message 'Versions'").
     cfg.insert("PROCESS_ID".to_owned(), c.process_id.to_string());
+    // Shorter packets for a lower transmit latency (0 = Inferno's 32 frames).
+    inferno_aoip::device_server::set_tx_max_fpp(c.tx_max_fpp);
 
     let (valid_tx, valid_rx, valid_spacers) = valid_flags();
     let tx_views = channel_views(c.tx_ring, c.tx_ring_frames as usize, c.tx_channels as usize, &valid_tx);

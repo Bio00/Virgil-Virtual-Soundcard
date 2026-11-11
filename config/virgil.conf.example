@@ -36,6 +36,14 @@ tx_latency_us = 4000
 tick_us = 1000
 # Playback safety margin for drivers (0 = two ticks).
 tx_lead_us = 0
+# Low transmit latency (experimental, see README "Low transmit latency"):
+# the largest packet Virgil sends, 2-32 frames (0 = 32 with the classic send
+# delay). With it set, the send delay is one tick + one packet + 0.25 ms.
+#tx_packet_frames = 16
+# Room for the sending thread to wake late (us, 100-10000): the smallest
+# transmit latency is the send delay plus this. Lower it only as far as the
+# transmit latency suggestion allows.
+#tx_wake_margin_us = 1000
 # Real-time scheduling (Linux SCHED_FIFO priority / macOS time-constraint /
 # Windows MMCSS "Pro Audio"). Busy-wait this long before each tick.
 rt_priority = 80

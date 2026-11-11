@@ -18,7 +18,7 @@ use super::tx_multicasts::MEDIA_PORT;
 use crate::device_server::TransferNotifier;
 use crate::media_clock::async_clock_receiver_to_realtime;
 use crate::ring_buffer::{ProxyToSamplesBuffer, RBOutput};
-use crate::util::os::set_current_thread_realtime;
+use crate::util::os::set_current_thread_realtime_period;
 use crate::util::real_time_box_channel::RealTimeBoxReceiver;
 use crate::util::thread::run_future_in_new_thread;
 use crate::{
@@ -32,6 +32,23 @@ use crate::{common::*, device_info::DeviceInfo};
 pub const FPP_MIN: u16 = 2;
 pub const FPP_MAX: u16 = 256;
 pub const FPP_MAX_ADVERTISED: u16 = 32;
+
+// Virgil patch: largest packet (frames) this device sends, FPP_MAX_ADVERTISED
+// unless the host asks for shorter packets (lower transmit latency: a packet
+// can only go out once its last frame is mixed). Advertised to receivers,
+// used for multicast flows, and unicast requests for longer packets are
+// refused.
+static TX_MAX_FPP: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::new(FPP_MAX_ADVERTISED);
+
+/// Set the largest packet the device sends (clamped to FPP_MIN..=FPP_MAX_ADVERTISED; 0 = default).
+pub fn set_tx_max_fpp(frames: u16) {
+  let v = if frames == 0 { FPP_MAX_ADVERTISED } else { frames.clamp(FPP_MIN, FPP_MAX_ADVERTISED) };
+  TX_MAX_FPP.store(v, Ordering::Relaxed);
+}
+
+pub fn tx_max_fpp() -> u16 {
+  TX_MAX_FPP.load(Ordering::Relaxed)
+}
 // Virgil patch: 64 (was 32), for 128 transmit channels to receivers that ask
 // for few channels per flow, with room for flows being re-requested.
 pub const MAX_FLOWS: u32 = 64;
@@ -395,7 +412,9 @@ impl<P: ProxyToSamplesBuffer> FlowsTransmitterInternal<P> {
     let mut next_process_events = now as Clock;
     drop(now);
 
-    if let Err(e) = set_current_thread_realtime(81) {
+    // Virgil patch: the thread wakes once per packet.
+    let packet_ns = tx_max_fpp() as u64 * 1_000_000_000 / sample_rate.max(1) as u64;
+    if let Err(e) = set_current_thread_realtime_period(81, packet_ns) {
       warn!("flows TX: could not raise the thread priority: {e:?}");
     }
     loop {
@@ -627,6 +646,9 @@ impl FlowsTransmitter {
     if let Some(fpp) = fpp {
       if fpp < FPP_MIN as usize || fpp > FPP_MAX as usize {
         return invalid(&format!("{fpp} frames per packet"));
+      }
+      if fpp > tx_max_fpp() as usize {
+        return invalid(&format!("{fpp} frames per packet, more than the {} this device sends", tx_max_fpp()));
       }
     }
     if let (Some(fpp), Some(bps)) = (fpp, bytes_per_sample) {
@@ -950,6 +972,19 @@ impl FlowsTransmitter {
 #[cfg(test)]
 mod tests {
   use super::late_skip_samples;
+
+  #[test]
+  fn tx_max_fpp_is_clamped_and_resets() {
+    use super::{set_tx_max_fpp, tx_max_fpp, FPP_MAX_ADVERTISED, FPP_MIN};
+    set_tx_max_fpp(16);
+    assert_eq!(tx_max_fpp(), 16);
+    set_tx_max_fpp(1);
+    assert_eq!(tx_max_fpp(), FPP_MIN);
+    set_tx_max_fpp(200);
+    assert_eq!(tx_max_fpp(), FPP_MAX_ADVERTISED);
+    set_tx_max_fpp(0);
+    assert_eq!(tx_max_fpp(), FPP_MAX_ADVERTISED);
+  }
 
   #[test]
   fn late_wakeup_skips_only_beyond_max_lag() {

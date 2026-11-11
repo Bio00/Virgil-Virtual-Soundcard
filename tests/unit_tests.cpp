@@ -669,6 +669,96 @@ TEST(config_process_id) {
   CHECK(!parse_config("[device]\nprocess_id = x\n", &bad, &err));
 }
 
+TEST(low_latency_transmit_config) {
+  Config d;
+  std::string err;
+  // Default: the classic send delay and minimum.
+  CHECK(parse_config("[device]\n", &d, &err) && validate_config(&d, &err));
+  CHECK(d.tx_send_delay_us() == 2500 && d.min_tx_latency_us() == 3500);
+  CHECK(format_config(d).find("tx_packet_frames") == std::string::npos);
+  // 16-frame packets at 48 kHz (334 us), 0.25 ms tick, 0.3 ms wake margin:
+  // send delay 250 + 334 + 250 = 834 us, minimum 1134 us.
+  Config c;
+  CHECK(parse_config("[device]\nsample_rate = 48000\ntick_us = 250\ntx_packet_frames = 16\n"
+                     "tx_wake_margin_us = 300\ntx_latency_us = 1250\n",
+                     &c, &err));
+  CHECK(validate_config(&c, &err));
+  CHECK(c.frames_to_us(16) == 334 && c.tx_send_delay_us() == 834 && c.min_tx_latency_us() == 1134);
+  Config r;
+  CHECK(parse_config(format_config(c), &r, &err) && validate_config(&r, &err));
+  CHECK(r.tx_packet_frames == 16 && r.tx_wake_margin_us == 300 && r.tx_latency_us == 1250);
+  // Below the minimum: refused with the low-latency formula in the message.
+  Config low = c;
+  low.tx_latency_us = 1000;
+  CHECK(!validate_config(&low, &err) && err.find("one tick + one packet") != std::string::npos);
+  // Out-of-range values.
+  Config bad;
+  CHECK(parse_config("[device]\ntx_packet_frames = 1\n", &bad, &err) && !validate_config(&bad, &err));
+  CHECK(parse_config("[device]\ntx_packet_frames = 64\n", &bad, &err) && !validate_config(&bad, &err));
+  CHECK(parse_config("[device]\ntx_wake_margin_us = 50\n", &bad, &err) && !validate_config(&bad, &err));
+  // Virgil Control computes the same minimum as the daemon.
+  vc::SettingsForm f;
+  for (unsigned tick : {125u, 250u, 500u, 1000u})
+    for (unsigned frames : {0u, 4u, 8u, 16u, 32u})
+      for (int rate = 0; rate < 4; ++rate)
+        for (unsigned margin : {150u, 400u, 1000u}) {
+          f.tx_packet_frames = frames;
+          f.tx_wake_margin_us = margin;
+          f.rate_index = rate;
+          Config k;
+          k.tick_us = tick;
+          k.tx_packet_frames = frames;
+          k.tx_wake_margin_us = margin;
+          k.sample_rate = uint32_t(std::atoi(vc::kRates[rate]));
+          CHECK(std::fabs(vc::min_tx_latency_ms(f, tick) - k.min_tx_latency_us() / 1000.0) < 1e-9);
+        }
+  // Presets below 3 ms only in low-latency mode.
+  f.tx_packet_frames = 16;
+  f.tx_wake_margin_us = 300;
+  f.rate_index = 1;
+  const auto p = vc::tx_latency_presets(f, 250);
+  CHECK(p[0] == "1.134" && p[1] == "1.25" && p[2] == "1.5");
+  f.tx_packet_frames = 0;
+  f.tx_wake_margin_us = 1000;
+  CHECK(vc::tx_latency_presets(f, 1000)[0] == "3.5" && vc::tx_latency_presets(f, 1000)[1] == "4");
+  // Read from the file by Virgil Control.
+  const auto lf = vc::load_settings("[device]\ntick_us = 250\ntx_packet_frames = 8\ntx_wake_margin_us = 400\n", {});
+  CHECK(lf.tx_packet_frames == 8 && lf.tx_wake_margin_us == 400 && lf.tick_us == 250);
+}
+
+TEST(low_latency_transmit_suggestion) {
+  // Low-latency mode: 0.25 ms of margin over the worst lag, 0.125 ms steps.
+  TxLatencyObservation o;
+  o.tick_us = 250;
+  o.send_delay_us = 834;
+  o.min_us = 1134;
+  o.fine = true;
+  o.current_ms = 2.0;
+  o.observed_s = kTxSuggestNeededS;
+  o.worst_lag_ms = 0.12;
+  // 0.834 + 0.12 + 0.25 = 1.204 -> 1.25
+  auto s = suggest_tx_latency(o);
+  CHECK(s.direction == TxLatencySuggestion::Direction::Lower && std::fabs(s.suggested_ms - 1.25) < 1e-9);
+  // Never below the configured minimum.
+  o.worst_lag_ms = 0.01;
+  s = suggest_tx_latency(o);
+  CHECK(std::fabs(s.suggested_ms - 1.25) < 1e-9);  // ceil(1.134 / 0.125) * 0.125
+  // A late send raises by at least one step.
+  o.current_ms = 1.25;
+  o.late_sends = 3;
+  o.worst_late_ms = 0.2;
+  s = suggest_tx_latency(o);
+  CHECK(s.direction == TxLatencySuggestion::Direction::Raise && s.suggested_ms >= 1.375 - 1e-9);
+  // Classic mode is unchanged: 0.5 ms steps, 1 ms margin.
+  TxLatencyObservation k;
+  k.tick_us = 1000;
+  k.current_ms = 6;
+  k.observed_s = kTxSuggestNeededS;
+  k.worst_lag_ms = 0.3;
+  s = suggest_tx_latency(k);
+  CHECK(std::fabs(s.suggested_ms - 4.0) < 1e-9);  // 2.5 + 0.3 + 1 = 3.8 -> 4
+}
+
 TEST(remote_setting_entry_from_dante_controller) {
   Config c;
   std::string err, key, text, why;

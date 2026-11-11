@@ -315,6 +315,57 @@ Changing the tick restarts the audio engine; apps reconnect (the soundcard
 layout changes). Other values from 125 to 4000 us can still be set in the
 configuration file.
 
+### Low transmit latency (experimental)
+
+The classic send delay (two ticks + 0.5 ms) assumes 32-frame packets and
+leaves 1 ms for the sending thread to wake late. Three settings in `[device]`
+(configuration file only) bring the transmit latency down to about 1 ms:
+
+* `tx_packet_frames`: the largest packet Virgil sends (2-32 frames). A packet
+  can only go out once its last frame is mixed, so shorter packets go out
+  sooner. Virgil advertises it and refuses receivers asking for longer ones.
+  The send delay becomes one tick + one packet + 0.25 ms.
+* `tick_us`: 250 or 125 (more CPU: about 20 % of one core on an Apple
+  silicon Mac, measured; the busy-wait before each tick is capped at a fifth
+  of the tick).
+* `tx_wake_margin_us`: room for the sending thread to wake late (default
+  1000). The smallest transmit latency is the send delay plus this.
+
+Virgil Control and the web panel follow these for the minimum and the
+presets. In this mode the transmit latency suggestion uses 0.25 ms of margin
+over the worst wakeup it saw and 0.125 ms steps: let it watch a long, busy
+session before trusting it, and raise the latency at the first dropout in
+*Dropouts and diagnostics*.
+
+Measured on an Apple silicon Mac (macOS, a unicast flow to a local
+receiver, 5 minutes each, real-time thread priority):
+
+| tick | packet | transmit latency | worst send wakeup | late sends |
+|---|---|---|---|---|
+| 0.25 ms | 16 frames | 1.25 ms | 0.125 ms | 0 |
+| 0.125 ms | 8 frames | 1.0 ms | 0.146 ms | 0 |
+
+For example (48 kHz):
+
+```ini
+[device]
+tick_us = 250
+tx_packet_frames = 16
+tx_wake_margin_us = 300
+tx_latency_us = 1250
+```
+
+Shorter packets mean more of them (16 frames at 48 kHz: 3000 per second
+per flow; 8 frames: 6000), so check the receiving devices accept the size:
+a receiver that only takes longer packets is refused (logged as *refusing tx
+flow*). Dante's own latency floor on hardware is 0.25 ms; a computer stays
+above it because of scheduling jitter.
+
+On macOS the Dante network threads (sending and receiving) now run with
+the Core Audio time-constraint policy; they used to fall back to normal
+priority ("could not raise the thread priority" in the log), which, under
+load, woke the sending thread tens of ms late.
+
 ### Dante over Wi-Fi
 
 Dante is made for wired Ethernet, and Audinate does not support it over

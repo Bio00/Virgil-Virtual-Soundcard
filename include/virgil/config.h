@@ -16,6 +16,10 @@ constexpr uint32_t kMaxLatencyUs = 200000;
 // software on the same computer uses for itself.
 constexpr uint32_t kDefaultProcessId = 86;  // 'V'
 
+// Low-latency transmit mode (tx_packet_frames set): room in the send delay
+// for the mixing tick to finish late.
+constexpr uint32_t kTxMixMarginUs = 250;
+
 struct Config {
   std::string device_name = "Virgil";  // name in Dante Controller (<= 31 chars)
   std::string interface;  // name or IPv4 of the Dante network NIC; empty = first active
@@ -64,6 +68,15 @@ struct Config {
   // as MAC + 0000; a Virgil with process id 0 had that same id, and Dante
   // Controller on this computer never talked to it. 0 = the old id.
   uint32_t process_id = kDefaultProcessId;
+  // Low transmit latency (experimental). tx_packet_frames: largest packet
+  // Virgil sends (2-32 frames; 0 = 32 and the classic send delay of two
+  // ticks + 0.5 ms). With it set, the send delay is one tick + one packet +
+  // kTxMixMarginUs, so short packets and a short tick bring it down.
+  uint32_t tx_packet_frames = 0;
+  // Room for the sending thread to wake late: the smallest transmit latency
+  // is the send delay plus this. Lower it only as far as the transmit
+  // latency suggestion (which measures this computer) allows.
+  uint32_t tx_wake_margin_us = 1000;
   // false: Virgil is stopped (Stop in Virgil Control): no audio engine, off
   // the Dante network, all its ports free, until started again.
   bool enabled = true;
@@ -89,11 +102,19 @@ struct Config {
   // scheduling jitter. tx_latency_us must cover this plus the network.
   // At 48 kHz a packet holds up to 32 frames (0.67 ms): with a 0.5 ms tick
   // the 1.5 ms delay covers the tick, one packet and ~0.3 ms of jitter.
-  uint32_t tx_send_delay_us() const { return 2 * tick_us + 500; }
+  uint32_t tx_send_delay_us() const {
+    if (!tx_packet_frames) return 2 * tick_us + 500;
+    // Low-latency mode: a packet's last frame is mixed by the tick that ends
+    // after it (at most one tick), then the packet can go.
+    return tick_us + frames_to_us(tx_packet_frames) + kTxMixMarginUs;
+  }
+  uint32_t frames_to_us(uint32_t frames) const {
+    return sample_rate ? uint32_t((uint64_t(frames) * 1000000 + sample_rate - 1) / sample_rate) : 0;
+  }
   // Smallest transmit latency validate_config accepts: the send delay plus
-  // 1 ms for the sending thread to wake late (3.5 ms at a 1 ms tick, 2.5 ms
-  // at 0.5 ms).
-  uint32_t min_tx_latency_us() const { return tx_send_delay_us() + 1000; }
+  // tx_wake_margin_us for the sending thread to wake late (by default 1 ms:
+  // 3.5 ms at a 1 ms tick, 2.5 ms at 0.5 ms).
+  uint32_t min_tx_latency_us() const { return tx_send_delay_us() + tx_wake_margin_us; }
   uint32_t tx_lead_frames() const {
     return tx_lead_us ? us_to_frames(tx_lead_us) : 2 * period_frames();
   }

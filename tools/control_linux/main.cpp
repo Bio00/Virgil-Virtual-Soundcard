@@ -768,10 +768,10 @@ void settings_tick_changed(SettingsUi& ui) {
   GtkEntry* entry = GTK_ENTRY(gtk_bin_get_child(GTK_BIN(ui.txl)));
   const std::string keep = gtk_entry_get_text(entry);
   gtk_combo_box_text_remove_all(GTK_COMBO_BOX_TEXT(ui.txl));
-  for (const auto& v : vc::tx_latency_presets(tick)) gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(ui.txl), v.c_str());
+  for (const auto& v : vc::tx_latency_presets(ui.f, tick)) gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(ui.txl), v.c_str());
   gtk_entry_set_text(entry, keep.c_str());
   char min[64];
-  std::snprintf(min, sizeof min, "Transmit (ms, %g minimum):", vc::min_tx_latency_ms(tick));
+  std::snprintf(min, sizeof min, "Transmit (ms, %g minimum):", vc::min_tx_latency_ms(ui.f, tick));
   gtk_label_set_text(GTK_LABEL(ui.txl_label), min);
   const std::string note = vc::tx_suggestion_note(ui.sug, tick);
   gtk_label_set_text(GTK_LABEL(ui.sug_label), note.c_str());

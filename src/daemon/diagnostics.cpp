@@ -50,8 +50,6 @@ std::string clock_time(int64_t ms) {
 const char* plural(uint64_t n, const char* one, const char* many) { return n == 1 ? one : many; }
 
 // Up to the next 0.5 ms (a hair of slack for floating-point noise).
-double ceil_half_ms(double ms) { return std::ceil(ms * 2 - 1e-6) / 2; }
-
 std::string duration_text(double s) {
   if (s < 3600) return fmt("%d min", int(s / 60));
   return fmt("%.1f h", s / 3600);
@@ -76,11 +74,14 @@ TxLatencySuggestion suggest_tx_latency(const TxLatencyObservation& o) {
   S r;
   Config c;
   c.tick_us = o.tick_us;
-  const double send_delay_ms = c.tx_send_delay_us() / 1000.0;
+  const double send_delay_ms = (o.send_delay_us ? o.send_delay_us : c.tx_send_delay_us()) / 1000.0;
+  const double margin_ms = o.fine ? kTxSuggestFineMarginMs : kTxSuggestMarginMs;
+  const double step_ms = o.fine ? kTxSuggestFineStepMs : 0.5;
+  auto ceil_step = [&](double ms) { return std::ceil(ms / step_ms - 1e-6) * step_ms; };
   r.observed_s = o.observed_s;
   r.needed_s = kTxSuggestNeededS;
   r.current_ms = o.current_ms;
-  r.min_ms = c.min_tx_latency_us() / 1000.0;
+  r.min_ms = (o.min_us ? o.min_us : c.min_tx_latency_us()) / 1000.0;
   r.late_sends = o.late_sends;
   r.worst_lag_ms = o.worst_lag_ms;
   if (o.observed_s < kTxSuggestNeededS) {
@@ -94,13 +95,13 @@ TxLatencySuggestion suggest_tx_latency(const TxLatencyObservation& o) {
   r.confidence = hours < 2 ? "low" : hours < 8 ? "medium" : "high";
   const std::string over = fmt("over %s of sending, %s confidence", duration_text(o.observed_s).c_str(), r.confidence);
 
-  double need = send_delay_ms + o.worst_lag_ms + kTxSuggestMarginMs;
+  double need = send_delay_ms + o.worst_lag_ms + margin_ms;
   if (o.late_sends) {
     // Audio was dropped: never keep (or lower) the setting that dropped it.
-    need = std::max(need, send_delay_ms + o.worst_late_ms + kTxSuggestMarginMs);
-    need = std::max(need, o.current_ms + 0.5);
+    need = std::max(need, send_delay_ms + o.worst_late_ms + margin_ms);
+    need = std::max(need, o.current_ms + step_ms);
   }
-  double want = std::max(ceil_half_ms(need), ceil_half_ms(r.min_ms));
+  double want = std::max(ceil_step(need), ceil_step(r.min_ms));
   want = std::min(want, kTxSuggestMaxMs);
 
   if (want > o.current_ms + 1e-6) {
@@ -108,12 +109,14 @@ TxLatencySuggestion suggest_tx_latency(const TxLatencyObservation& o) {
     r.suggested_ms = want;
     const std::string why =
         o.late_sends ? fmt("%" PRIu64 " late %s dropped audio", o.late_sends, plural(o.late_sends, "send", "sends"))
-                     : fmt("the sending thread woke up to %.1f ms late, leaving less than %.0f ms of margin",
-                           o.worst_lag_ms, kTxSuggestMarginMs);
+                     : fmt(o.fine ? "the sending thread woke up to %.2f ms late, leaving less than %g ms of margin"
+                                  : "the sending thread woke up to %.1f ms late, leaving less than %g ms of margin",
+                           o.worst_lag_ms, margin_ms);
     r.text = fmt("Transmit latency should be raised to %g ms (now %g ms): %s (%s).", want, o.current_ms, why.c_str(),
                  over.c_str());
-  } else if (o.current_ms - want >= 0.5 - 1e-6) {
-    // Only steps of at least 0.5 ms down, so the suggestion does not churn.
+  } else if (o.current_ms - want >= step_ms - 1e-6) {
+    // Only steps of at least 0.5 ms (0.125 ms in low-latency mode) down, so
+    // the suggestion does not churn.
     r.direction = S::Direction::Lower;
     r.suggested_ms = want;
     r.text = fmt("Transmit latency can be lowered to %g ms (now %g ms): the sending thread woke up at most %.1f ms "
@@ -263,6 +266,9 @@ void Diagnostics::reset_tx_observation_locked(uint32_t tick_us) {
   tx_obs_ = TxLatencyObservation();
   tx_obs_.tick_us = tick_us;
   tx_obs_.current_ms = current;
+  tx_obs_.send_delay_us = tx_send_delay_us_;
+  tx_obs_.min_us = tx_min_us_;
+  tx_obs_.fine = tx_fine_;
 }
 
 TxLatencySuggestion Diagnostics::tx_suggestion_locked() const { return suggest_tx_latency(tx_obs_); }
@@ -287,11 +293,16 @@ void Diagnostics::engine_started(const Config& cfg, int64_t now) {
   // The send delay depends on the tick: what was observed at another tick
   // does not carry over. A new transmit latency keeps it.
   tx_tick_us_ = cfg.tick_us;
-  if (tx_obs_.tick_us != cfg.tick_us) reset_tx_observation_locked(cfg.tick_us);
+  tx_send_delay_us_ = cfg.tx_packet_frames ? cfg.tx_send_delay_us() : 0;
+  tx_min_us_ = cfg.tx_packet_frames || cfg.tx_wake_margin_us != 1000 ? cfg.min_tx_latency_us() : 0;
+  tx_fine_ = cfg.tx_packet_frames != 0;
+  if (tx_obs_.tick_us != cfg.tick_us || tx_obs_.send_delay_us != tx_send_delay_us_ || tx_obs_.fine != tx_fine_)
+    reset_tx_observation_locked(cfg.tick_us);
+  tx_obs_.min_us = tx_min_us_;
   tx_obs_.current_ms = tx_latency_ms_;
   add_locked(Kind::Service, std::string(), 0, 0, now,
-             fmt("Audio engine started: %.1f kHz, %u out / %u in, receive latency %.1f ms, transmit latency "
-                 "%.1f ms%s",
+             fmt("Audio engine started: %.1f kHz, %u out / %u in, receive latency %g ms, transmit latency "
+                 "%g ms%s",
                  cfg.sample_rate / 1000.0, cfg.tx_channels, cfg.rx_channels, rx_latency_ms_, tx_latency_ms_,
                  cfg.tick_us != 1000 ? fmt(", mixing tick %g ms", cfg.tick_us / 1000.0).c_str() : ""));
 }

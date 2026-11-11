@@ -125,7 +125,8 @@ impl TransmitMulticasts {
     info!("adding flow index {flow_index} with local channel indices {channel_indices:?}");
     let bytes_per_sample = (self.self_info.bits_per_sample / 8).try_into().unwrap();
     let dst_addr_arc: Arc<AtomicU32> = Arc::new(0.into());
-    let fpp = FPP_MAX_ADVERTISED.try_into().unwrap() /* TODO */;
+    let _ = FPP_MAX_ADVERTISED;
+    let fpp = crate::device_server::flows_tx::tx_max_fpp() as usize; // Virgil patch: was always 32
     let dst = {
       let mut bundles = self.bundles.lock().await;
       // Virgil patch: refuse instead of panicking (a remote create request or

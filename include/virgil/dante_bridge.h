@@ -36,6 +36,9 @@ typedef struct VgDanteConfig {
   // Dante process id: the last two bytes of the device id (after the MAC
   // address). Not 0, which Dante software on the same computer uses.
   uint16_t process_id;
+  // Largest packet sent, in frames (2..32); 0 = 32. Shorter packets let the
+  // transmit latency go lower.
+  uint16_t tx_max_fpp;
 } VgDanteConfig;
 
 typedef struct VgDanteRxStats {

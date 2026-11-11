@@ -83,23 +83,38 @@ unsigned tick_of_index(const SettingsForm& f, int index) {
   return f.tick_us;  // the file's own value, kept
 }
 
-double min_tx_latency_ms(unsigned tick_us) { return (2.0 * tick_us + 500 + 1000) / 1000.0; }
+double min_tx_latency_ms(unsigned tick_us) { return min_tx_latency_ms(SettingsForm(), tick_us); }
 
-std::vector<std::string> tx_latency_presets(unsigned tick_us) {
-  const double min = min_tx_latency_ms(tick_us);
+// As virgil::Config::min_tx_latency_us (checked against it in the unit tests).
+double min_tx_latency_ms(const SettingsForm& f, unsigned tick_us) {
+  if (!f.tx_packet_frames) return (2.0 * tick_us + 500 + f.tx_wake_margin_us) / 1000.0;
+  const unsigned long long rate = std::strtoull(kRates[f.rate_index >= 0 && f.rate_index < 4 ? f.rate_index : 1],
+                                                nullptr, 10);
+  const unsigned packet_us = unsigned((f.tx_packet_frames * 1000000ull + rate - 1) / rate);
+  return (double(tick_us) + packet_us + 250 + f.tx_wake_margin_us) / 1000.0;
+}
+
+std::vector<std::string> tx_latency_presets(unsigned tick_us) { return tx_latency_presets(SettingsForm(), tick_us); }
+
+std::vector<std::string> tx_latency_presets(const SettingsForm& f, unsigned tick_us) {
+  const double min = min_tx_latency_ms(f, tick_us);
   std::vector<std::string> out{g_text(min)};
-  for (double v : {3.0, 3.5, 4.0, 5.0, 6.0, 10.0, 20.0, 40.0})
-    if (v > min + 1e-9) out.push_back(g_text(v));
+  for (double v : {1.0, 1.25, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 5.0, 6.0, 10.0, 20.0, 40.0})
+    if (v > min + 1e-9 && (f.tx_packet_frames || v >= 3.0)) out.push_back(g_text(v));
   return out;
 }
 
-std::string tx_latency_min_text(unsigned tick_us) { return "(" + g_text(min_tx_latency_ms(tick_us)) + " ms minimum)"; }
+std::string tx_latency_min_text(unsigned tick_us) { return tx_latency_min_text(SettingsForm(), tick_us); }
+
+std::string tx_latency_min_text(const SettingsForm& f, unsigned tick_us) {
+  return "(" + g_text(min_tx_latency_ms(f, tick_us)) + " ms minimum)";
+}
 
 std::string tx_latency_problem(const SettingsForm& f) {
   char* end = nullptr;
   const double v = std::strtod(f.tx_latency_ms.c_str(), &end);
   if (end == f.tx_latency_ms.c_str() || !(v > 0)) return "Enter the transmit latency in milliseconds, for example 4.";
-  const double min = min_tx_latency_ms(f.tick_us);
+  const double min = min_tx_latency_ms(f, f.tick_us);
   if (v + 1e-9 < min)
     return "The transmit latency must be at least " + g_text(min) + " ms with a " + g_text(f.tick_us / 1000.0) +
            " ms mixing tick.";
@@ -161,6 +176,12 @@ SettingsForm load_settings(const std::string& c, const std::vector<Interface>& a
   if (!rl.empty()) f.rx_latency_ms = ms_text(rl);
   if (!tl.empty()) f.tx_latency_ms = ms_text(tl);
   f.tick_us = conf_tick(c);
+  {
+    const std::string pf = conf_get(c, "device", "tx_packet_frames"), wm = conf_get(c, "device", "tx_wake_margin_us");
+    const unsigned long p = std::strtoul(pf.c_str(), nullptr, 10), w = std::strtoul(wm.c_str(), nullptr, 10);
+    f.tx_packet_frames = p >= 2 && p <= 32 ? unsigned(p) : 0;
+    f.tx_wake_margin_us = w >= 100 && w <= 10000 ? unsigned(w) : 1000;
+  }
   f.local_clock = lower(conf_get(c, "device", "clock")) == "free";
   f.master_capable = truthy(conf_get(c, "ptp", "master_capable"));
   f.wifi = truthy(conf_get(c, "ptp", "wifi"));

@@ -123,7 +123,7 @@ impl DeviceMDNSResponder {
         .add_txt_truncated(kv("enc", self_info.bits_per_sample))
         .add_txt_truncated(kv("en", self_info.bits_per_sample))
         .add_txt_truncated(kv("latency_ns", advertised_latency_ns(&self_info)))
-        .add_txt_truncated(format!("fpp={},{}", FPP_MAX_ADVERTISED, FPP_MIN))
+        .add_txt_truncated(format!("fpp={},{}", super::flows_tx::tx_max_fpp().min(FPP_MAX_ADVERTISED), FPP_MIN))
         .add_txt_truncated(kv("nchan", MAX_CHANNELS_IN_FLOW.min(self_info.tx_channels.len() as u16)));
       if default {
         b = b.add_txt_truncated("default");

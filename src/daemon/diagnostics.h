@@ -28,6 +28,11 @@ struct TxLatencyObservation {
   uint64_t late_sends = 0;   // wakeups after the transmit latency (audio dropped)
   double worst_late_ms = 0;  // worst of those
   double current_ms = 4;     // transmit latency in use
+  // Send delay and smallest transmit latency of the configuration observed
+  // (0 = the classic ones for tick_us); fine: low-latency transmit mode
+  // (tx_packet_frames set), suggested in finer steps with less margin.
+  uint32_t send_delay_us = 0, min_us = 0;
+  bool fine = false;
 };
 struct TxLatencySuggestion {
   enum class State { Collecting, Ready };
@@ -45,6 +50,8 @@ struct TxLatencySuggestion {
 };
 constexpr double kTxSuggestNeededS = 30 * 60;  // only offered after this much sending
 constexpr double kTxSuggestMarginMs = 1.0;     // on top of the worst lag
+constexpr double kTxSuggestFineMarginMs = 0.25;  // the same in low-latency transmit mode
+constexpr double kTxSuggestFineStepMs = 0.125;   // its rounding (otherwise 0.5 ms)
 constexpr double kTxSuggestMaxMs = 40.0;       // validate_config's maximum
 TxLatencySuggestion suggest_tx_latency(const TxLatencyObservation& o);
 const char* tx_suggestion_state_name(TxLatencySuggestion::State s);       // "collecting" | "ready"
@@ -108,6 +115,9 @@ class Diagnostics {
   std::vector<std::string> hints_locked(int64_t now) const;
   TxLatencySuggestion tx_suggestion_locked() const;
   void reset_tx_observation_locked(uint32_t tick_us);
+  // The send-delay figures of the running configuration, kept in the observation.
+  uint32_t tx_send_delay_us_ = 0, tx_min_us_ = 0;
+  bool tx_fine_ = false;
   static const char* kind_name(Kind k);
   static std::string event_text(const Event& e, double period_ms, double rx_latency_ms, double tx_latency_ms);
 

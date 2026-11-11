@@ -363,8 +363,8 @@ HttpResponse ControlServer::diagnostics_report() {
     cfg_path = ctx_->config_path;
     char b[512];
     std::snprintf(b, sizeof b,
-                  "\nDevice  \"%s\" on %s, %u Hz, %u out / %u in, receive latency %.1f ms, transmit latency "
-                  "%.1f ms\nService %s%s%s\n",
+                  "\nDevice  \"%s\" on %s, %u Hz, %u out / %u in, receive latency %g ms, transmit latency "
+                  "%g ms\nService %s%s%s\n",
                   c.device_name.c_str(), e ? ipv4_to_string(e->interface_address()).c_str() : "-", c.sample_rate,
                   c.tx_channels, c.rx_channels, c.latency_us / 1000.0, c.tx_latency_us / 1000.0,
                   ctx_->status.c_str(), ctx_->error.empty() ? "" : ": ", ctx_->error.c_str());

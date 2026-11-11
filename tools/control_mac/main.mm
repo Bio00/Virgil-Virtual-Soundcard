@@ -963,10 +963,10 @@ RemoteInfo parse_remote(const std::string& status_body) {
     const unsigned t = vc::tick_of_index(f0, int(tick.indexOfSelectedItem));
     NSString* keep = txl.stringValue;
     [txl removeAllItems];
-    for (const auto& v : vc::tx_latency_presets(t)) [txl addItemWithObjectValue:ns(v)];
+    for (const auto& v : vc::tx_latency_presets(f0, t)) [txl addItemWithObjectValue:ns(v)];
     txl.stringValue = keep;
     char min[64];
-    std::snprintf(min, sizeof min, "Transmit latency (ms, %g min):", vc::min_tx_latency_ms(t));
+    std::snprintf(min, sizeof min, "Transmit latency (ms, %g min):", vc::min_tx_latency_ms(f0, t));
     txlLabel.stringValue = [NSString stringWithUTF8String:min];
     const std::string note = vc::tx_suggestion_note(suggestion, t);
     sugText.stringValue = ns(note);

@@ -454,9 +454,20 @@ const FIELDS = ["f-name", "f-interface", "f-rate", "f-txch", "f-rxch", "f-lat", 
 const DEFAULTS = { sample_rate: "48000", clock: "ptp", latency_us: "4000", tx_latency_us: "4000", tick_us: "1000",
                    master_capable: "false", wifi: "false", remote_access: "false", remote_password: "" };
 // Mixing tick: the smallest transmit latency is two ticks + 1.5 ms (3.5 ms at
-// 1 ms, 2.5 ms at 0.5 ms), as the daemon checks it.
+// 1 ms, 2.5 ms at 0.5 ms), as the daemon checks it. With tx_packet_frames
+// (low transmit latency, file only): one tick + one packet + 0.25 ms +
+// tx_wake_margin_us (virgil::Config::min_tx_latency_us).
 const formTick = () => Number($("f-tick").value) || 1000;
-const minTxMs = tick => (2 * tick + 1500) / 1000;
+function minTxMs(tick) {
+  const t = S.cfg || "";
+  const frames = Number(getKey(t, "device", "tx_packet_frames")) || 0;
+  const wm = Number(getKey(t, "device", "tx_wake_margin_us"));
+  const margin = wm >= 100 && wm <= 10000 ? wm : 1000;
+  if (!(frames >= 2 && frames <= 32)) return (2 * tick + 500 + margin) / 1000;
+  const rate = Number($("f-rate").value) || 48000;
+  const packetUs = Math.ceil(frames * 1e6 / rate);
+  return (tick + packetUs + 250 + margin) / 1000;
+}
 function tickOptions(v) {
   const sel = $("f-tick");
   sel.querySelectorAll("option[data-custom]").forEach(o => o.remove());

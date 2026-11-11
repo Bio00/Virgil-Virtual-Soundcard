@@ -1006,9 +1006,9 @@ void settings_tick_update(HWND d, const SettingsData& data) {
   const unsigned tick = vc::tick_of_index(data.form, sel < 0 ? 0 : sel);
   const std::wstring keep = get_text(d, IDC_TXLAT);  // CB_RESETCONTENT clears the edit field too
   SendDlgItemMessageW(d, IDC_TXLAT, CB_RESETCONTENT, 0, 0);
-  for (const auto& v : vc::tx_latency_presets(tick)) combo_add(d, IDC_TXLAT, widen(v));
+  for (const auto& v : vc::tx_latency_presets(data.form, tick)) combo_add(d, IDC_TXLAT, widen(v));
   SetDlgItemTextW(d, IDC_TXLAT, keep.c_str());
-  SetDlgItemTextW(d, IDC_TXMIN, widen(vc::tx_latency_min_text(tick)).c_str());
+  SetDlgItemTextW(d, IDC_TXMIN, widen(vc::tx_latency_min_text(data.form, tick)).c_str());
   SetDlgItemTextW(d, IDC_TXSUG, widen(vc::tx_suggestion_note(data.sug, tick)).c_str());
   ShowWindow(GetDlgItem(d, IDC_TXSUG_APPLY), vc::tx_suggestion_applicable(data.sug, tick) ? SW_SHOW : SW_HIDE);
 }

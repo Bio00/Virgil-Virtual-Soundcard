@@ -150,6 +150,8 @@ bool parse_config(const std::string& text, Config* c, std::string* error) {
       else if (key == "control_port") { if (!to_u32(val, &u) || u > 65535) return fail("bad control_port"); c->control_port = u; }
       else if (key == "clock") c->clock = lower(val);
       else if (key == "ports") c->ports = lower(val);
+      else if (key == "tx_packet_frames") { if (!need_u32(&c->tx_packet_frames)) return false; }
+      else if (key == "tx_wake_margin_us") { if (!need_u32(&c->tx_wake_margin_us)) return false; }
       else if (key == "process_id") {
         if (!to_u32(val, &u) || u > 65535) return fail("process_id must be a number between 0 and 65535");
         c->process_id = u;
@@ -217,9 +219,14 @@ bool validate_config(Config* c, std::string* error) {
     return fail("receive latency (latency_us) must be between 0.5 ms and 200 ms");
   if (c->tx_latency_us < 500 || c->tx_latency_us > kMaxLatencyUs)
     return fail("transmit latency (tx_latency_us) must be between 0.5 ms and 200 ms");
+  if (c->tx_packet_frames != 0 && (c->tx_packet_frames < 2 || c->tx_packet_frames > 32))
+    return fail("tx_packet_frames must be 0 (automatic) or between 2 and 32");
+  if (c->tx_wake_margin_us < 100 || c->tx_wake_margin_us > 10000)
+    return fail("tx_wake_margin_us must be between 100 and 10000");
   if (c->tx_latency_us < c->min_tx_latency_us())
     return fail("transmit latency (tx_latency_us) must be at least " + ms(c->min_tx_latency_us()) +
-                " (two ticks + 1.5 ms)");
+                (c->tx_packet_frames ? " (one tick + one packet + " + ms(kTxMixMarginUs) + " + tx_wake_margin_us)"
+                                     : std::string(" (two ticks + 1.5 ms)")));
   if (c->clock != "ptp" && c->clock != "free") return fail("clock must be 'ptp' or 'free'");
   if (c->ports != "auto" && c->ports != "standard") {
     uint32_t p = 0;
@@ -564,6 +571,8 @@ std::string format_config(const Config& c) {
   o << "clock = " << c.clock << "\n";
   if (c.ports != "auto") o << "ports = " << c.ports << "\n";
   if (c.process_id != kDefaultProcessId) o << "process_id = " << c.process_id << "\n";
+  if (c.tx_packet_frames) o << "tx_packet_frames = " << c.tx_packet_frames << "\n";
+  if (c.tx_wake_margin_us != 1000) o << "tx_wake_margin_us = " << c.tx_wake_margin_us << "\n";
   if (!c.enabled) o << "enabled = false\n";
   o << "control_port = " << c.control_port << "\n";
   if (c.remote_access) o << "remote_access = true\n";

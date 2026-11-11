@@ -252,6 +252,7 @@ bool Engine::start(std::unique_ptr<ClockSource> clock) {
     }
     dc.alt_port = alt_port_;
     dc.process_id = uint16_t(cfg_.process_id);
+    dc.tx_max_fpp = uint16_t(cfg_.tx_packet_frames);
     {
       std::lock_guard<std::mutex> l(g_engine_mutex);
       g_engine = this;
@@ -315,8 +316,8 @@ bool Engine::start(std::unique_ptr<ClockSource> clock) {
     VIRGIL_LOG_INFO("network adapter: %s%s%s", mine.empty() ? ipv4_to_string(iface_).c_str() : mine.c_str(),
                     others.empty() ? "" : "; other adapters: ", others.c_str());
   }
-  VIRGIL_LOG_INFO("\"%s\" up on %s: %u Hz, %u transmit / %u receive channels, latency rx %.1f ms "
-               "tx %.1f ms",
+  VIRGIL_LOG_INFO("\"%s\" up on %s: %u Hz, %u transmit / %u receive channels, latency rx %g ms "
+               "tx %g ms",
                cfg_.device_name.c_str(), ipv4_to_string(iface_).c_str(), cfg_.sample_rate,
                cfg_.tx_channels, cfg_.rx_channels, cfg_.latency_us / 1000.0,
                cfg_.tx_latency_us / 1000.0);
@@ -419,7 +420,9 @@ void Engine::tick_loop() {
   const uint32_t txch = cfg_.tx_channels;
   const uint32_t rxch = cfg_.rx_channels;
   float* rx = rx_ring_at(hdr_, ring, txch);
-  const int64_t spin = int64_t(cfg_.spin_us) * 1000;
+  // Busy-wait before each tick, at most a fifth of it: at a 0.125 ms tick a
+  // 50 us spin would keep a core 40 % busy.
+  const int64_t spin = int64_t(std::min<uint32_t>(cfg_.spin_us, cfg_.tick_us / 5)) * 1000;
   const int64_t resync_ns = std::max<int64_t>(50000000, 4 * period_ns);
   // Inferno reads frame f of the transmit ring at f + tx_send_delay; the
   // tick that writes [T-P, T) is due at T: later than send_delay - P and the

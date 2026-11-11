@@ -22,6 +22,9 @@ struct SettingsForm {
   // Mixing tick ([device] tick_us): the menu offers kTicks; another value
   // from a hand-edited file is kept (and listed) until changed.
   unsigned tick_us = 1000;
+  // Low-latency transmit ([device] tx_packet_frames / tx_wake_margin_us),
+  // file-only settings: they change the smallest transmit latency.
+  unsigned tx_packet_frames = 0, tx_wake_margin_us = 1000;
   bool local_clock = false;  // clock = free
   bool master_capable = false;
   bool wifi = false;  // [ptp] wifi: the clock filter for Wi-Fi networks
@@ -56,6 +59,11 @@ double min_tx_latency_ms(unsigned tick_us);
 std::vector<std::string> tx_latency_presets(unsigned tick_us);
 // "(3.5 ms minimum)".
 std::string tx_latency_min_text(unsigned tick_us);
+// The same for the form's file settings (sample rate, tx_packet_frames,
+// tx_wake_margin_us) at a tick; equals the forms above without them.
+double min_tx_latency_ms(const SettingsForm& f, unsigned tick_us);
+std::vector<std::string> tx_latency_presets(const SettingsForm& f, unsigned tick_us);
+std::string tx_latency_min_text(const SettingsForm& f, unsigned tick_us);
 // Why f.tx_latency_ms cannot be saved at f.tick_us, or "".
 std::string tx_latency_problem(const SettingsForm& f);
 // The note for a transmit latency above 40 ms (allowed, up to 200 ms, but
