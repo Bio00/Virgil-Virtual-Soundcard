@@ -24,7 +24,9 @@ fully as the installed version; for an always-on setup that starts at boot,
 use the installer Virgil-<version>-macos.pkg instead.
 
 Remove the driver: sudo rm -rf /Library/Audio/Plug-Ins/HAL/VirgilAudio.driver
-and then: sudo killall coreaudiod
+and then: sudo killall coreaudiod; sleep 2; sudo killall AirPlayXPCHelper
+(the second command stops a macOS AirPlay loop that can keep coreaudiod busy
+after coreaudiod restarts)
 
 Independent project: Virgil is built on Inferno, an independent open-source
 project, and is not affiliated with, authorized or endorsed by Audinate.

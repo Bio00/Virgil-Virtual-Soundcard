@@ -9,4 +9,10 @@ if ! sudo rm -rf /Library/Audio/Plug-Ins/HAL/VirgilAudio.driver ||
 fi
 sudo xattr -dr com.apple.quarantine /Library/Audio/Plug-Ins/HAL/VirgilAudio.driver 2>/dev/null
 sudo killall coreaudiod 2>/dev/null
+# macOS can leave AirPlayXPCHelper re-registering its driver with the new
+# coreaudiod in a loop (thousands of times a minute), which keeps coreaudiod
+# and every audio client busy and makes apps hang when they open audio.
+# Restarting it (launchd relaunches it) breaks the loop.
+sleep 2
+sudo killall AirPlayXPCHelper 2>/dev/null
 echo "Done. \"Virgil Virtual Soundcard\" is now available. You can close this window."

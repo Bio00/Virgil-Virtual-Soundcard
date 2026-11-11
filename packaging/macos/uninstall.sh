@@ -31,6 +31,12 @@ if [ "${1:-}" = "--purge" ]; then
 fi
 pkgutil --forget org.virgil.soundcard >/dev/null 2>&1 || true
 killall coreaudiod 2>/dev/null || true
+# macOS can leave AirPlayXPCHelper re-registering its driver with the new
+# coreaudiod in a loop (thousands of times a minute), which keeps coreaudiod
+# and every audio client busy and makes apps hang when they open audio.
+# Restarting it (launchd relaunches it) breaks the loop.
+sleep 2
+killall AirPlayXPCHelper 2>/dev/null || true
 if [ "${1:-}" = "--purge" ]; then
 	echo "Virgil removed. Configuration and logs purged."
 else

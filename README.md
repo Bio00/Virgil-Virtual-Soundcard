@@ -788,6 +788,11 @@ Known limitations:
   console falls back to `Local\`, which only that session can reach.
 * On macOS, the HAL plug-in may run inside coreaudiod's sandbox, and that may
   block opening `virgild`'s POSIX shared memory. This has not been tested.
+* After coreaudiod restarts (installing or removing Virgil restarts it), macOS
+  can leave its AirPlay helper re-registering with coreaudiod in a loop:
+  coreaudiod and the system audio services stay near 100% CPU and apps hang
+  when they open audio. The installers restart the helper for you; if it
+  happens anyway, run `sudo killall AirPlayXPCHelper` or restart the Mac.
 
 ### Security notes
 
