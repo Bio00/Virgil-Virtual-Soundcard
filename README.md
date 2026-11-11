@@ -108,6 +108,23 @@ the computer, so Virgil's id is the adapter's MAC address plus process id
 computer would find Virgil but never talk to it. The same applies to Dante Virtual Soundcard, but the two cannot run
 at once: both need the PTP clock ports 319/320.
 
+### Device Config in Dante Controller
+
+Dante Controller's **Device Config** tab can change Virgil like other Dante
+devices:
+
+| Dante Controller | Virgil setting | Effect |
+|---|---|---|
+| Device Latency | `latency_us` (receive latency, 0.5–200 ms) | saved, audio engine restarts |
+| Sample Rate | `sample_rate` (44.1, 48, 88.2, 96 kHz) | saved, audio engine restarts |
+| Reboot | | audio engine restarts |
+| Identify | | noted in the log and the dropout diagnostics |
+
+The change is written to the configuration file as if made in Virgil
+Control's Settings, so it stays after a restart. Encoding shows 24-bit
+(the only one Virgil sends); Factory Reset is ignored (Virgil Control resets
+Virgil's settings).
+
 ## Architecture
 
 ```
@@ -678,8 +695,8 @@ Known limitations:
   tens of µs of clock jitter. That is fine for audio, but Dante Controller
   may show the clock as less stable than hardware.
 * Dante features Inferno does not implement are missing: AES67 mode, Dante
-  Domain Manager, device locking, encrypted control, and changing latency
-  or sample rate from Dante Controller (set them in Virgil instead).
+  Domain Manager, device locking and encrypted control. Encoding is fixed at
+  24-bit, and Factory Reset in Dante Controller is ignored.
 * Changing the sample rate or channel counts restarts the audio engine;
   apps may briefly stop (ASIO hosts get a reset request, the macOS device
   changes format by itself).

@@ -302,6 +302,33 @@ pub extern "C" fn vg_dante_set_rename_callback(cb: Option<extern "C" fn(i32, u32
     set_rename_hook(if cb.is_some() { Some(forward_rename) } else { None });
 }
 
+// ---- settings from Dante Controller -----------------------------------------
+
+static SETTINGS_CB: RwLock<Option<extern "C" fn(i32, u32)>> = RwLock::new(None);
+
+fn forward_setting(s: inferno_aoip::device_server::RemoteSetting) {
+    use inferno_aoip::device_server::RemoteSetting::*;
+    // As forward_rename: never call it under the lock.
+    let cb = *SETTINGS_CB.read().unwrap();
+    if let Some(cb) = cb {
+        match s {
+            RxLatencyNs(ns) => cb(1, ns),
+            SampleRate(hz) => cb(2, hz),
+            Reboot => cb(3, 0),
+            Identify => cb(4, 0),
+        }
+    }
+}
+
+/// Called (from a Dante thread) when Dante Controller changes a device
+/// setting: kind 1 = receive latency (ns), 2 = sample rate (Hz), 3 = reboot,
+/// 4 = identify. NULL removes it; without one Virgil offers no settings.
+#[no_mangle]
+pub extern "C" fn vg_dante_set_settings_callback(cb: Option<extern "C" fn(i32, u32)>) {
+    *SETTINGS_CB.write().unwrap() = cb;
+    inferno_aoip::device_server::set_remote_setting_hook(if cb.is_some() { Some(forward_setting) } else { None });
+}
+
 /// # Safety
 /// `buf` points to `len` writable bytes. Copies the current name of a channel
 /// of the running device (NUL-terminated, truncated); returns 0 if unknown.

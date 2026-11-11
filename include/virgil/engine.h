@@ -120,6 +120,13 @@ class Engine {
   // Channels renamed from the network (Dante Controller) since the last call,
   // for the daemon to save to its configuration.
   std::vector<Rename> take_renames();
+  // Settings changed from Dante Controller (VG_SETTING_* kind and value)
+  // since the last call, for the daemon to save and apply.
+  struct RemoteSetting {
+    int kind;
+    uint32_t value;
+  };
+  std::vector<RemoteSetting> take_remote_settings();
 
   // Direct access to the Dante-side rings (tests).
   std::vector<int32_t>& dante_tx_ring() { return dtx_; }
@@ -155,10 +162,12 @@ class Engine {
   uint8_t reported_id_[8] = {};
   std::array<std::atomic<uint32_t>, kMaxChannels> rx_peak_{};
   static void on_rename(int is_tx, uint32_t index, const char* name);
+  static void on_remote_setting(int kind, uint32_t value);
   void publish_names_locked();
   mutable std::mutex names_mutex_;
   std::vector<std::string> tx_names_, rx_names_;  // guarded by names_mutex_
   std::vector<Rename> renames_;                   // guarded by names_mutex_
+  std::vector<RemoteSetting> remote_settings_;    // guarded by names_mutex_
 
   // Diagnostics.
   std::atomic<uint64_t> resyncs_{0};

@@ -126,6 +126,15 @@ std::mutex& config_file_mutex();
 // `path`, keeping everything else (comments, layout, other keys).
 bool set_config_value(const std::string& path, const std::string& section, const std::string& key,
                       const std::string& value, std::string* error);
+// Device settings Dante Controller can change (same numbers as the bridge's
+// VG_SETTING_*).
+enum RemoteSettingKind : int { kRemoteRxLatencyNs = 1, kRemoteSampleRate = 2 };
+// The [device] key and value to save for a setting changed in Dante
+// Controller. False when nothing is to be saved: `why` says why the value is
+// refused (the configuration would not be valid), or is empty when the value
+// is already the configured one.
+bool remote_setting_entry(const Config& cfg, int kind, uint32_t value, std::string* key, std::string* text,
+                          std::string* why);
 // Set (or with an empty name, remove) one channel name in the file at `path`,
 // keeping everything else. Used when a channel is renamed in Dante Controller.
 bool save_channel_name(const std::string& path, bool tx, uint32_t index, const std::string& name,

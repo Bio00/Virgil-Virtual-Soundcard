@@ -1,4 +1,5 @@
 use super::channels_subscriber::ChannelsSubscriber;
+use super::remote_config::{self, RemoteSetting, SettingsRequest};
 use crate::byte_utils::*;
 use crate::common::*;
 use crate::media_clock::MediaClock;
@@ -79,6 +80,9 @@ struct Multicaster<'s> {
   get_peaks: PeaksCallback,
   had_clock: bool,
   unknown_logged: Vec<u64>,
+  // Virgil patch: a sample rate Dante Controller chose, until the engine
+  // restarts with it (shown as "pending").
+  pending_sample_rate: Option<u32>,
 }
 
 impl<'s> Multicaster<'s> {
@@ -115,6 +119,7 @@ impl<'s> Multicaster<'s> {
       get_peaks,
       had_clock: false,
       unknown_logged: vec![],
+      pending_sample_rate: None,
     };
     if let Some((major, minor, patch)) = *PRODUCT_VERSION.lock().unwrap() {
       r.product_version_bytes = [major, minor, H(patch), L(patch)];
@@ -166,7 +171,9 @@ impl<'s> Multicaster<'s> {
     content[0x14] = 0;
     content[0x15] = 0;
     content[0x16] = 0x10;
-    content[0x17] = 0;
+    // Virgil patch: with a host that applies them, offer what real hardware
+    // offers (0xdb: identify, sample rate & encoding, reboot, factory reset).
+    content[0x17] = if remote_config::hook_installed() { 0xdb } else { 0 };
 
     content[0xbb] = 0x1f; // if 0, device is flooded with info multicast requests around 1 per second
                           /* content[0xbf] = 5;
@@ -347,23 +354,62 @@ impl<'s> Multicaster<'s> {
   // is offered, since Virgil's rate is set in its own settings.
   async fn send_sample_rate_info(&mut self) {
     let rate = self.self_info.sample_rate;
-    let mut bytes = ByteBuffer::new();
-    bytes.set_endian(bytebuffer::Endian::BigEndian);
-    bytes.write_bytes(&[0x00, 0x18, 0x00, 0x04]);
-    bytes.write_u32(rate); // current
-    bytes.write_u32(rate); // pending (after reboot)
-    bytes.write_bytes(&[0x00, 0x02, 0x00, 0x00]);
-    for _ in 0..4 {
-      bytes.write_u32(rate); // supported rates
-    }
+    let supported: Vec<u32> = if remote_config::hook_installed() {
+      remote_config::SUPPORTED_SAMPLE_RATES.to_vec()
+    } else {
+      vec![rate]
+    };
+    let content =
+      remote_config::audio_capability_content(rate, self.pending_sample_rate.unwrap_or(rate), &supported);
     self
-      .send(
-        self.device_info_destination,
-        0xffff,
-        [0x07, 0x2a, 0x00, 0x80, 0x00, 0x00, 0x00, 0x00],
-        bytes.as_bytes(),
-      )
+      .send(self.device_info_destination, 0xffff, [0x07, 0x2a, 0x00, 0x80, 0x00, 0x00, 0x00, 0x00], &content)
       .await;
+  }
+
+  // Virgil patch: answer to 0738008300000064 (encoding). Virgil sends 24-bit
+  // PCM only.
+  async fn send_encoding_info(&mut self) {
+    let bits = self.self_info.bits_per_sample as u32;
+    let content = remote_config::audio_capability_content(bits, bits, &[bits]);
+    self
+      .send(self.device_info_destination, 0xffff, [0x07, 0x2a, 0x00, 0x82, 0x00, 0x00, 0x00, 0x00], &content)
+      .await;
+  }
+
+  // Virgil patch: settings Dante Controller writes on this port.
+  async fn handle_settings_request(&mut self, request: SettingsRequest) {
+    match request {
+      SettingsRequest::SetSampleRate(rate) => {
+        if !remote_config::SUPPORTED_SAMPLE_RATES.contains(&rate) {
+          warn!("Dante Controller asked for sample rate {rate} Hz; not supported");
+        } else if rate == self.self_info.sample_rate {
+          self.pending_sample_rate = None;
+        } else if remote_config::notify(RemoteSetting::SampleRate(rate)) {
+          info!("Dante Controller set the sample rate to {rate} Hz");
+          self.pending_sample_rate = Some(rate);
+        }
+        self.send_sample_rate_info().await;
+      }
+      SettingsRequest::SetEncoding(bits) => {
+        if bits != self.self_info.bits_per_sample as u32 {
+          warn!("Dante Controller asked for encoding {bits}; only {} is supported", self.self_info.bits_per_sample);
+        }
+        self.send_encoding_info().await;
+      }
+      SettingsRequest::Reboot => {
+        if remote_config::notify(RemoteSetting::Reboot) {
+          info!("Dante Controller asked for a reboot: restarting the audio engine");
+        }
+      }
+      SettingsRequest::FactoryReset => {
+        warn!("Dante Controller asked for a factory reset; ignored (reset Virgil's settings in Virgil Control)");
+      }
+      SettingsRequest::Identify => {
+        if remote_config::notify(RemoteSetting::Identify) {
+          info!("Dante Controller asked this device to identify itself");
+        }
+      }
+    }
   }
 
   async fn send_clock_stats(&mut self) {
@@ -456,6 +502,10 @@ pub async fn run_server(
           error!("too short packet received: {}", hex::encode(request_buf));
           continue;
         }
+        if let Some(req) = remote_config::parse_settings_request(request_buf) {
+          mcaster.handle_settings_request(req).await;
+          continue;
+        }
         let opcode = &request_buf[24..32];
         match opcode {
           // Virgil patch: Dante Controller also sends these with a
@@ -468,6 +518,9 @@ pub async fn run_server(
           },
           [0x07, _, 0, 0x81, 0, 0, 0, _] => {
             mcaster.send_sample_rate_info().await;
+          },
+          [0x07, _, 0, 0x83, 0, 0, 0, _] => {
+            mcaster.send_encoding_info().await;
           },
           [0x07, _ /* was 0x38 */, 0, 0x21, 0, 0, 0, _ /* was 0x64 */] => {
             mcaster.send_clock_stats().await;

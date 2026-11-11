@@ -80,6 +80,16 @@ void vg_dante_set_clock_master(const uint8_t* id);
 // Called from a Dante thread when a channel is renamed from the network
 // (Dante Controller): is_tx, 0-based index, new name. NULL removes it.
 void vg_dante_set_rename_callback(void (*cb)(int is_tx, uint32_t index, const char* name));
+// Called from a Dante thread when Dante Controller changes a device setting
+// (Device Config): kind is one of VG_SETTING_*, value as noted there. NULL
+// removes it; without a callback the device offers no settings.
+enum {
+  VG_SETTING_RX_LATENCY_NS = 1,  // value: device (receive) latency in ns
+  VG_SETTING_SAMPLE_RATE = 2,    // value: Hz
+  VG_SETTING_REBOOT = 3,
+  VG_SETTING_IDENTIFY = 4,
+};
+void vg_dante_set_settings_callback(void (*cb)(int kind, uint32_t value));
 // Current name of a channel of the running device into buf (len bytes).
 // Returns 0 if the device has not published its names yet.
 int vg_dante_channel_name(int is_tx, uint32_t index, char* buf, uint32_t len);

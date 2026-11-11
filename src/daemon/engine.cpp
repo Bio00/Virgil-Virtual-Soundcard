@@ -10,6 +10,10 @@
 #include "virgil/client.h"
 #include "virgil/dante_bridge.h"
 #include "virgil/log.h"
+
+static_assert(int(virgil::kRemoteRxLatencyNs) == VG_SETTING_RX_LATENCY_NS &&
+                  int(virgil::kRemoteSampleRate) == VG_SETTING_SAMPLE_RATE,
+              "remote setting kinds must match the bridge");
 #include "virgil/net.h"
 #include "virgil/platform.h"
 #include "virgil/ptp.h"
@@ -253,6 +257,7 @@ bool Engine::start(std::unique_ptr<ClockSource> clock) {
       g_engine = this;
     }
     vg_dante_set_rename_callback(&Engine::on_rename);
+    vg_dante_set_settings_callback(&Engine::on_remote_setting);
     dante_ = vg_dante_start(&dc);
     if (!dante_) {
       const char* why = vg_dante_last_error();
@@ -271,6 +276,7 @@ bool Engine::start(std::unique_ptr<ClockSource> clock) {
         if (g_engine == this) g_engine = nullptr;
       }
       vg_dante_set_rename_callback(nullptr);
+      vg_dante_set_settings_callback(nullptr);
       clock_.reset();
       return false;
     }
@@ -334,7 +340,10 @@ void Engine::stop() {
   }
   // Outside g_engine_mutex: clearing takes the bridge's locks, which a
   // rename in flight holds while it waits for g_engine_mutex.
-  if (was_current) vg_dante_set_rename_callback(nullptr);
+  if (was_current) {
+    vg_dante_set_rename_callback(nullptr);
+    vg_dante_set_settings_callback(nullptr);
+  }
   if (dante_) {
     vg_dante_set_clock_master(nullptr);
     reported_master_ = false;
@@ -680,6 +689,20 @@ void Engine::on_rename(int is_tx, uint32_t index, const char* name) {
   if (!g_engine || !name) return;
   std::lock_guard<std::mutex> n(g_engine->names_mutex_);
   g_engine->renames_.push_back({is_tx != 0, index, name});
+}
+
+void Engine::on_remote_setting(int kind, uint32_t value) {
+  std::lock_guard<std::mutex> l(g_engine_mutex);
+  if (!g_engine) return;
+  std::lock_guard<std::mutex> n(g_engine->names_mutex_);
+  if (g_engine->remote_settings_.size() < 64) g_engine->remote_settings_.push_back({kind, value});
+}
+
+std::vector<Engine::RemoteSetting> Engine::take_remote_settings() {
+  std::lock_guard<std::mutex> l(names_mutex_);
+  std::vector<RemoteSetting> r;
+  r.swap(remote_settings_);
+  return r;
 }
 
 std::vector<Engine::Rename> Engine::take_renames() {

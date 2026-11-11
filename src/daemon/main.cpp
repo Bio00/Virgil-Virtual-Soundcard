@@ -289,6 +289,51 @@ int run_daemon(virgil::DaemonContext& ctx, void (*on_started)()) {
           if (!virgil::save_channel_name(path, rn.tx, rn.index, keep, &err))
             VIRGIL_LOG_WARN("could not save the channel name: %s", err.c_str());
         }
+        // Settings changed in Dante Controller's Device Config: saved like a
+        // Settings change in Virgil Control, then the engine restarts with them.
+        bool remote_reload = false;
+        for (const auto& rs : engine->take_remote_settings()) {
+          if (rs.kind == VG_SETTING_REBOOT) {
+            VIRGIL_LOG_INFO("Dante Controller asked for a reboot; restarting the audio engine");
+            ctx.diag.note(virgil::Diagnostics::Kind::Service,
+                          "Reboot from Dante Controller: the audio engine was restarted", virgil::wall_ms());
+            remote_reload = true;
+            continue;
+          }
+          if (rs.kind == VG_SETTING_IDENTIFY) {
+            VIRGIL_LOG_INFO("Dante Controller asked Virgil to identify itself");
+            ctx.diag.note(virgil::Diagnostics::Kind::Service, "Identify from Dante Controller", virgil::wall_ms());
+            continue;
+          }
+          std::string key, text, why, path, err;
+          {
+            std::lock_guard<std::mutex> l(ctx.mutex);
+            if (!virgil::remote_setting_entry(ctx.cfg, rs.kind, rs.value, &key, &text, &why)) {
+              if (!why.empty()) VIRGIL_LOG_WARN("setting from Dante Controller refused: %s", why.c_str());
+              continue;
+            }
+            if (ctx.config_path.empty()) ctx.config_path = virgil::default_config_path();
+            path = ctx.config_path;
+          }
+          if (!virgil::set_config_value(path, "device", key, text, &err)) {
+            VIRGIL_LOG_WARN("could not save %s = %s from Dante Controller: %s", key.c_str(), text.c_str(),
+                            err.c_str());
+            continue;
+          }
+          VIRGIL_LOG_INFO("Dante Controller set %s = %s; saved to %s, restarting the audio engine", key.c_str(),
+                          text.c_str(), path.c_str());
+          ctx.diag.note(virgil::Diagnostics::Kind::Service,
+                        "Changed in Dante Controller: " + key + " = " + text + " (audio engine restarted)",
+                        virgil::wall_ms());
+          remote_reload = true;
+        }
+        if (remote_reload) {
+          {
+            std::lock_guard<std::mutex> l(ctx.mutex);
+            ctx.status = "restarting";
+          }
+          ctx.reload = true;
+        }
       }
       if (engine && !engine->dante_healthy() && !g_quit && !ctx.reload) {
         ctx.diag.note(virgil::Diagnostics::Kind::Service,

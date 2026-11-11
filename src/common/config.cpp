@@ -514,6 +514,31 @@ bool set_config_value(const std::string& path, const std::string& section_name, 
   return write_config_file(path, out, error);
 }
 
+bool remote_setting_entry(const Config& cfg, int kind, uint32_t value, std::string* key, std::string* text,
+                          std::string* why) {
+  why->clear();
+  Config check = cfg;
+  if (kind == kRemoteRxLatencyNs) {
+    // Dante Controller works in ns; Virgil keeps whole us.
+    const uint32_t us = (value + 500) / 1000;
+    if (us == cfg.latency_us) return false;
+    check.latency_us = us;
+    *key = "latency_us";
+    *text = std::to_string(us);
+  } else if (kind == kRemoteSampleRate) {
+    if (value == cfg.sample_rate) return false;
+    check.sample_rate = value;
+    *key = "sample_rate";
+    *text = std::to_string(value);
+  } else {
+    *why = "unknown setting " + std::to_string(kind);
+    return false;
+  }
+  check.ring_frames = 0;  // sized for the new values, as at start-up
+  if (!validate_config(&check, why)) return false;
+  return true;
+}
+
 bool save_channel_name(const std::string& path, bool tx, uint32_t index, const std::string& name,
                        std::string* error) {
   return set_config_value(path, "channel_names", std::string(tx ? "tx" : "rx") + std::to_string(index + 1), name,

@@ -669,6 +669,27 @@ TEST(config_process_id) {
   CHECK(!parse_config("[device]\nprocess_id = x\n", &bad, &err));
 }
 
+TEST(remote_setting_entry_from_dante_controller) {
+  Config c;
+  std::string err, key, text, why;
+  CHECK(parse_config("[device]\nsample_rate = 48000\nlatency_us = 4000\n", &c, &err) && validate_config(&c, &err));
+  // Latency arrives in ns, is kept in us.
+  CHECK(remote_setting_entry(c, kRemoteRxLatencyNs, 1000000, &key, &text, &why));
+  CHECK(key == "latency_us" && text == "1000" && why.empty());
+  // Already configured: nothing to save, no complaint.
+  CHECK(!remote_setting_entry(c, kRemoteRxLatencyNs, 4000000, &key, &text, &why) && why.empty());
+  // Out of Virgil's range: refused with a reason.
+  CHECK(!remote_setting_entry(c, kRemoteRxLatencyNs, 250000, &key, &text, &why) && !why.empty());
+  CHECK(remote_setting_entry(c, kRemoteSampleRate, 96000, &key, &text, &why));
+  CHECK(key == "sample_rate" && text == "96000");
+  CHECK(!remote_setting_entry(c, kRemoteSampleRate, 32000, &key, &text, &why) && !why.empty());
+  CHECK(!remote_setting_entry(c, 99, 1, &key, &text, &why) && !why.empty());
+  // The saved value reads back.
+  Config r;
+  CHECK(parse_config("[device]\nsample_rate = \"96000\"\nlatency_us = \"1000\"\n", &r, &err) &&
+        validate_config(&r, &err) && r.sample_rate == 96000 && r.latency_us == 1000);
+}
+
 TEST(control_conf_aliases_and_last_wins) {
   // Virgil Control reads the file as the daemon does.
   const std::string t =

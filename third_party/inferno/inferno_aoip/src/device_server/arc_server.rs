@@ -8,6 +8,7 @@ use super::flows_rx::MAX_FLOWS as MAX_RX_FLOWS;
 use super::flows_tx::{FlowInfo as TXFlowInfo, FPP_MAX_ADVERTISED};
 use super::flows_tx::{FlowsTransmitter, MAX_CHANNELS_IN_FLOW, MAX_FLOWS as MAX_TX_FLOWS};
 use super::mdns_server::DeviceMDNSResponder;
+use super::remote_config;
 use crate::device_info::DeviceInfo;
 use crate::net_utils::UdpSocketWrapper;
 use crate::protocol::mcast::make_channel_change_notification;
@@ -636,41 +637,49 @@ pub async fn run_server(
         }
 
         0x1100 => {
-          // used by DC
-          // received unknown opcode1 0x1100, content 00130201820482050210021182188219830183028306031003110303802100f08060002200630064
-          // whole packet: "272900320e621100000000130201820482050210021182188219830183028306031003110303802100f08060002200630064"
-
-          // ???
-          // looks like something dependent on active connections
-          let content = [0u8; 110];
-          // XXX: not necessary
-          /* let content = [
-            0x12, 0x12, 0x02, 0x01, 0x00, 0x01, 0x82, 0x04, 0x00, 0x54, 0x82, 0x05, 0x00, 0x58,
-            0x02, 0x10, 0x00, 0x10, 0x02, 0x11, 0x00, 0x10, 0x00, 0x00, 0x82, 0x18, 0x00, 0x00,
-            0x82, 0x19, 0x83, 0x01, 0x00, 0x5c, 0x83, 0x02, 0x00, 0x60, 0x83, 0x06, 0x00, 0x64,
-            0x03, 0x10, 0x00, 0x10, 0x03, 0x11, 0x00, 0x10, 0x03, 0x03, 0x00, 0x02, 0x80, 0x21,
-            0x00, 0x68, 0x00, 0x00, 0x00, 0xf0, 0x00, 0x00, 0x80, 0x60, 0x00, 0x22, 0x00, 0x01,
-            0x00, 0x00, 0x00, 0x63, /* 1000000: */ 0x00, 0x0f, 0x42, 0x40, 0x00, 0x0f, 0x42,
-            0x40, 0x00, 0x0f, 0x42, 0x40, 0x01, 0x35, 0xf1, 0xb4, 0x00, 0x0f, 0x42, 0x40, 0x00,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x00,
-          ]; */
-          conn.respond(&content).await;
+          // Device settings (Dante Controller's Device Config: latency).
+          // Virgil patch: real values instead of zeros ("0.0 msec").
+          // Request content lists the properties it wants, e.g.
+          // 00130201820482050210021182188219830183028306031003110303802100f08060002200630064
+          if remote_config::hook_installed() {
+            let body = remote_config::device_settings_response(
+              self_info.sample_rate,
+              u32::try_from(self_info.latency_ns).unwrap_or(u32::MAX),
+            );
+            conn.respond(&body).await;
+          } else {
+            conn.respond(&[0u8; 110]).await;
+          }
+        }
+        0x1101 => {
+          // Virgil patch: device latency set from Dante Controller.
+          let latency = remote_config::parse_latency_set(request.content());
+          match latency {
+            Some(ns) if (remote_config::MIN_LATENCY_NS..=remote_config::MAX_LATENCY_NS).contains(&ns)
+              && remote_config::notify(remote_config::RemoteSetting::RxLatencyNs(ns)) =>
+            {
+              info!("Dante Controller set the device latency to {:.2} ms", ns as f64 / 1e6);
+              conn.respond(&remote_config::latency_applied_response(ns)).await;
+            }
+            Some(ns) => {
+              warn!("Dante Controller asked for a device latency of {:.2} ms; refused", ns as f64 / 1e6);
+              conn.respond_with_code(0x0022, &[]).await;
+            }
+            None => {
+              if reported_unknown.len() < 256 && reported_unknown.insert((0x1101, 0)) {
+                info!("device settings write not understood (further ones not logged): {}", hex::encode(request.content()));
+              }
+              conn.respond_with_code(0x0022, &[]).await;
+            }
+          }
         }
         0x1102 => {
-          // identical for all low channels count devices
-          let content = [0u8; 94];
-          // XXX not necessary
-          /* let content = [
-            /* number of items, 2B: */ 0x00, 0x17, 0x80, 0x20, 0x00, 0x01,
-            0x80, 0x21, 0x00, 0x03, 0x00, 0x22, 0x00, 0x03, 0x00, 0x23, 0x00, 0x03, 0x00, 0x24, 0x00, 0x01,
-            0x02, 0x01, 0x00, 0x03, 0x82, 0x04, 0x00, 0x03, 0x82, 0x05, 0x00, 0x03, 0x02, 0x0a, 0x00, 0x01,
-            0x02, 0x0b, 0x00, 0x01, 0x02, 0x10, 0x00, 0x03, 0x02, 0x11, 0x00, 0x03, 0x02, 0x12, 0x00, 0x03,
-            0x02, 0x13, 0x00, 0x01, 0x02, 0x14, 0x00, 0x01, 0x83, 0x01, 0x00, 0x03, 0x83, 0x06, 0x00, 0x01,
-            0x83, 0x02, 0x00, 0x01, 0x03, 0x10, 0x00, 0x01, 0x03, 0x11, 0x00, 0x01, 0x03, 0x03, 0x00, 0x03,
-            0x83, 0xf0, 0x00, 0x01, 0x06, 0x01, 0x00, 0x01
-          ]; */
-          conn.respond(&content).await;
+          // Which device settings exist and which can be written.
+          if remote_config::hook_installed() {
+            conn.respond(&remote_config::PROPERTY_DIRECTORY).await;
+          } else {
+            conn.respond(&[0u8; 94]).await;
+          }
         }
         0x3300 => {
           // WTF: this is necessary to avoid 'clock domain mismatch' error in DC
