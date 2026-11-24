@@ -329,11 +329,25 @@ impl<P: ProxyToSamplesBuffer> FlowsTransmitterInternal<P> {
         // Virgil patch: a packet that cannot be sent is dropped (counted,
         // logged at most once a second), not retried: retrying in a tight
         // loop blocked the other flows and logged every attempt.
-        let sent = match flow.socket.send(&pbuff[0..to_send]) {
+        let mut sent = match flow.socket.send(&pbuff[0..to_send]) {
           Ok(written) if written == to_send => Ok(()),
           Ok(written) => Err(SendFailure::Short(written)),
           Err(e) => Err(SendFailure::Error(e.kind())),
         };
+        // Virgil patch: macOS refused a single packet now and then with
+        // HostUnreachable (once every 15-20 min on a running flow, likely
+        // while it refreshed the receiver's ARP entry, max_age 20 min) while
+        // the next ones went out: try such a packet once more right away.
+        if let Err(SendFailure::Error(kind @ (std::io::ErrorKind::HostUnreachable | std::io::ErrorKind::NetworkUnreachable))) = sent {
+          sent = match flow.socket.send(&pbuff[0..to_send]) {
+            Ok(written) if written == to_send => {
+              info!("tx packet sent on the second try after send error {kind:?}");
+              Ok(())
+            }
+            Ok(written) => Err(SendFailure::Short(written)),
+            Err(e) => Err(SendFailure::Error(e.kind())),
+          };
+        }
         flow.next_ts = flow.next_ts.wrapping_add(flow.fpp as LongClock);
         match sent {
           Ok(()) => flow.running = true,
