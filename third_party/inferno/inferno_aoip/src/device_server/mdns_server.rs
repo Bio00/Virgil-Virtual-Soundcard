@@ -154,28 +154,30 @@ impl DeviceMDNSResponder {
     };
   }
 
-  pub fn remove_tx_channel(&self, index: usize) {
-    let self_info = &*self.self_info;
-    let remove = |ch_name: &str| {
-      let name = match Name::from_labels([format!("{}@{}", ch_name, self_info.friendly_hostname).as_bytes()]) {
-        Ok(n) => n,
-        Err(_) => return,  // was never advertised
-      };
-      match self.handle.read().unwrap().as_ref() {
-        Some(handle) => {
-          handle.remove_named_service(service_type("_netaudio-chan"), name).log_and_forget();
-        }
-        None => {
-          log::error!("BUG: trying to remove channel using BroadcasterHandle after it was shut down");
-        }
-      }
+  /// Virgil patch: withdraw one advertised "<ch_name>@<device>" service, for
+  /// a name the channel no longer has.
+  pub fn remove_tx_channel_name(&self, ch_name: &str) {
+    let name = match Name::from_labels([format!("{}@{}", ch_name, self.self_info.friendly_hostname).as_bytes()]) {
+      Ok(n) => n,
+      Err(_) => return, // was never advertised
     };
-    let txch = &self_info.tx_channels[index];
-    remove(&txch.factory_name);
+    match self.handle.read().unwrap().as_ref() {
+      Some(handle) => {
+        handle.remove_named_service(service_type("_netaudio-chan"), name).log_and_forget();
+      }
+      None => {
+        log::error!("BUG: trying to remove channel using BroadcasterHandle after it was shut down");
+      }
+    }
+  }
+
+  pub fn remove_tx_channel(&self, index: usize) {
+    let txch = &self.self_info.tx_channels[index];
+    self.remove_tx_channel_name(&txch.factory_name);
     let friendly_name_locked = txch.friendly_name.read();
     let friendly_name = friendly_name_locked.unwrap();
     if txch.factory_name != *friendly_name {
-      remove(&friendly_name);
+      self.remove_tx_channel_name(&friendly_name);
     }
   }
 

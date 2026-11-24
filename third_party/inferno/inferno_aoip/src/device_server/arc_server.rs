@@ -42,7 +42,27 @@ pub async fn run_server(
   shutdown: BroadcastReceiver<()>,
 ) {
   let mut subscriber = None;
+  // Virgil patch: this task runs alongside the transmitter start, which
+  // advertises every TX channel on mDNS. When the transmitter wins the race,
+  // it advertises the default names ("TX 1@device") and the saved names
+  // loaded here ("Main L") were never advertised: Dante Controller shows
+  // them, but a receiver subscribed to one cannot resolve it and stays
+  // unresolved. Re-advertise the channels whose name the load changed.
+  let names_before: Vec<String> =
+    self_info.tx_channels.iter().map(|c| c.friendly_name.read().unwrap().clone()).collect();
   let mut saved_channels = SavedChannelsSettings::load(state_storage, self_info.clone());
+  if flows_tx.lock().await.is_some() {
+    for (index, old_name) in names_before.iter().enumerate() {
+      let txch = &self_info.tx_channels[index];
+      if *txch.friendly_name.read().unwrap() != *old_name {
+        if *old_name != txch.factory_name {
+          mdns_server.remove_tx_channel_name(old_name);
+        }
+        mdns_server.remove_tx_channel_name(&txch.factory_name); // add_tx_channel adds it again
+        mdns_server.add_tx_channel(index);
+      }
+    }
+  }
   let server = UdpSocketWrapper::new(Some(self_info.ip_address), self_info.arc_port, shutdown).await;
   let mut conn = req_resp::Connection::new(server);
   let mut recv_buff = net_utils::ReceiveBuffer::new();
