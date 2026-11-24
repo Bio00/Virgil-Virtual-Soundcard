@@ -87,6 +87,115 @@ use handle::*;
 
 pub(crate) struct BroadcasterConfig {
 	services: BTreeSet<ServiceDnsResponse>,
+	/// Virgil patch: unsolicited packets waiting to be sent (announcements of
+	/// added services, goodbyes of removed ones). The original only answered
+	/// queries, so peers kept stale records (old TXT, removed names) in their
+	/// caches until the TTL ran out.
+	outbox: Vec<Outgoing>,
+	wake: Arc<tokio::sync::Notify>,
+}
+
+/// Virgil patch: one unsolicited mDNS packet.
+pub(crate) struct Outgoing {
+	due: tokio::time::Instant,
+	packet: Vec<u8>,
+	/// The service id a goodbye withdraws: re-adding that service before
+	/// the goodbye went out cancels it (a remove + add of the same name).
+	goodbye_of: Option<trust_dns_client::rr::Name>,
+}
+
+/// RFC 6762 section 8.3: announce at least twice, one second apart.
+const ANNOUNCE_REPEAT: std::time::Duration = std::time::Duration::from_secs(1);
+
+fn encode(message: &DnsMessage) -> Option<Vec<u8>> {
+	let mut buf = Vec::with_capacity(512);
+	message.emit(&mut BinEncoder::new(&mut buf)).ok()?;
+	Some(buf)
+}
+
+impl BroadcasterConfig {
+	pub(crate) fn new(services: BTreeSet<ServiceDnsResponse>) -> Self {
+		let mut config = Self { services: BTreeSet::new(), outbox: Vec::new(), wake: Arc::new(tokio::sync::Notify::new()) };
+		for service in services {
+			config.add(service);
+		}
+		config
+	}
+
+	/// Adds (or replaces) a service and queues its announcement.
+	pub(crate) fn add(&mut self, service: ServiceDnsResponse) -> Option<ServiceDnsResponse> {
+		let id = service.service_id().clone();
+		self.outbox.retain(|o| o.goodbye_of.as_ref() != Some(&id));
+		if let Some(packet) = encode(&service.dns_response) {
+			let now = tokio::time::Instant::now();
+			self.outbox.push(Outgoing { due: now, packet: packet.clone(), goodbye_of: None });
+			self.outbox.push(Outgoing { due: now + ANNOUNCE_REPEAT, packet, goodbye_of: None });
+		}
+		self.wake.notify_one();
+		self.services.replace(service)
+	}
+
+	/// Queues a goodbye (every record with TTL 0) for a removed service.
+	pub(crate) fn goodbye(&mut self, service: &ServiceDnsResponse) {
+		let mut message = service.dns_response.clone();
+		for record in message.answers_mut().iter_mut() {
+			record.set_ttl(0);
+		}
+		for record in message.additionals_mut().iter_mut() {
+			record.set_ttl(0);
+		}
+		if let Some(packet) = encode(&message) {
+			self.outbox.push(Outgoing {
+				due: tokio::time::Instant::now(),
+				packet,
+				goodbye_of: Some(service.service_id().clone()),
+			});
+		}
+		self.wake.notify_one();
+	}
+
+	/// Removes the services `keep` rejects, queueing a goodbye for each.
+	pub(crate) fn remove_where(&mut self, mut keep: impl FnMut(&ServiceDnsResponse) -> bool) -> bool {
+		let (kept, removed): (BTreeSet<_>, Vec<_>) =
+			std::mem::take(&mut self.services).into_iter().fold((BTreeSet::new(), Vec::new()), |(mut k, mut r), s| {
+				if keep(&s) {
+					k.insert(s);
+				} else {
+					r.push(s);
+				}
+				(k, r)
+			});
+		self.services = kept;
+		for service in &removed {
+			self.goodbye(service);
+		}
+		!removed.is_empty()
+	}
+
+	/// Queues goodbyes for every service, for a shutdown.
+	pub(crate) fn goodbye_all(&mut self) {
+		self.outbox.clear();
+		let services = std::mem::take(&mut self.services);
+		for service in &services {
+			self.goodbye(service);
+		}
+	}
+
+	/// Takes the packets due by `now`; returns them and the next due time.
+	fn take_due(&mut self, now: tokio::time::Instant) -> (Vec<Vec<u8>>, Option<tokio::time::Instant>) {
+		let mut due = Vec::new();
+		let mut next = None::<tokio::time::Instant>;
+		self.outbox.retain_mut(|o| {
+			if o.due <= now {
+				due.push(std::mem::take(&mut o.packet));
+				false
+			} else {
+				next = Some(next.map_or(o.due, |n| n.min(o.due)));
+				true
+			}
+		});
+		(due, next)
+	}
 }
 
 /// A built mDNS broadcaster (server) instance, ready to be started.
@@ -155,8 +264,25 @@ impl Broadcaster {
 				_ = Self::recv_loop(tx, &mut rx, &config) => (),
 				_ = shutdown_rx => (),
 			}
+			// Virgil patch: send the goodbyes queued by the shutdown.
+			let (packets, _) = config.write().unwrap().take_due(tokio::time::Instant::now() + std::time::Duration::from_secs(3600));
+			Self::send_unsolicited(tx, packets).await;
 		} else {
 			Self::recv_loop(tx, &mut rx, &config).await
+		}
+	}
+
+	/// Virgil patch: multicasts queued announcements / goodbyes, pausing a
+	/// little every few packets so a burst (every channel of a device) is
+	/// not dropped by receivers.
+	async fn send_unsolicited(tx: &AsyncMdnsSocket, packets: Vec<Vec<u8>>) {
+		for (i, packet) in packets.iter().enumerate() {
+			if i > 0 && i % 16 == 0 {
+				tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+			}
+			if let Err(err) = tx.send_multicast(packet).await {
+				log::warn!("Failed to send unsolicited mDNS packet: {err}");
+			}
 		}
 	}
 
@@ -165,8 +291,19 @@ impl Broadcaster {
 	// The future just won't be Send.
 	async fn recv_loop(tx: &AsyncMdnsSocket, rx: &mut MdnsSocketRecv<'_>, config: &RwLock<BroadcasterConfig>) {
 		let mut send_buf = vec![0u8; 4096];
+		let wake = config.read().unwrap().wake.clone();
 		loop {
-			let ((count, addr), packet) = match rx.recv_multicast().await {
+			// Virgil patch: send what is due, then wait for a query, the next
+			// due packet or a newly queued one.
+			let (packets, next_due) = config.write().unwrap().take_due(tokio::time::Instant::now());
+			Self::send_unsolicited(tx, packets).await;
+			let sleep_until = next_due.unwrap_or_else(|| tokio::time::Instant::now() + std::time::Duration::from_secs(3600));
+			let recv = tokio::select! {
+				recv = rx.recv_multicast() => recv,
+				_ = tokio::time::sleep_until(sleep_until) => continue,
+				_ = wake.notified() => continue,
+			};
+			let ((count, addr), packet) = match recv {
 				Ok(recv) => recv,
 				Err(err) => {
 					log::warn!("Failed to receive on mDNS socket: {err}");

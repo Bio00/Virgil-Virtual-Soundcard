@@ -14,12 +14,15 @@ pub(super) struct BroadcasterHandleInner {
 pub(super) struct BroadcasterHandleDrop(pub(super) Option<BroadcasterHandleInner>);
 impl BroadcasterHandleDrop {
 	fn shutdown(&mut self) -> Result<(), ShutdownError> {
-		let BroadcasterHandleInner { thread, shutdown_tx, .. } = match self.0.take() {
+		let BroadcasterHandleInner { thread, shutdown_tx, config } = match self.0.take() {
 			Some(inner) => inner,
 			None => return Ok(()),
 		};
 
 		if !thread.is_finished() {
+			// Virgil patch: withdraw every record before going away, so peers
+			// drop them now instead of when their TTL runs out.
+			config.write().unwrap().goodbye_all();
 			shutdown_tx.send(()).ok();
 		}
 
@@ -69,7 +72,7 @@ impl BroadcasterHandle {
 	///
 	/// The service will be broadcasted at the next opportunity.
 	pub fn add_service(&self, service: Service) -> Result<(), ServiceDnsPacketBuilderError> {
-		match self.with_config(|broadcaster| Ok(broadcaster.write().unwrap().services.replace(service.try_into()?))) {
+		match self.with_config(|broadcaster| Ok(broadcaster.write().unwrap().add(service.try_into()?))) {
 			Some(Ok(_)) | None => Ok(()),
 			Some(Err(err)) => Err(err),
 		}
@@ -82,17 +85,14 @@ impl BroadcasterHandle {
 		let service_type = service_type.into_fqdn().map_err(|_| BadDnsNameError)?;
 		let service_name = service_name.into_fqdn().map_err(|_| BadDnsNameError)?;
 
-		let mut found = false;
-		self.with_config(|broadcaster| {
-			broadcaster.write().unwrap().services.retain(|service| {
-				if *service.service_name() != service_name || *service.service_type() != service_type {
-					true
-				} else {
-					found = true;
-					false
-				}
+		let found = self
+			.with_config(|broadcaster| {
+				broadcaster
+					.write()
+					.unwrap()
+					.remove_where(|service| *service.service_name() != service_name || *service.service_type() != service_type)
 			})
-		});
+			.unwrap_or(false);
 
 		Ok(found)
 	}
@@ -103,17 +103,9 @@ impl BroadcasterHandle {
 	pub fn remove_service_type(&self, service_type: impl IntoDnsName) -> Result<bool, BadDnsNameError> {
 		let service_type = service_type.into_fqdn().map_err(|_| BadDnsNameError)?;
 
-		let mut found = false;
-		self.with_config(|broadcaster| {
-			broadcaster.write().unwrap().services.retain(|service| {
-				if *service.service_type() != service_type {
-					true
-				} else {
-					found = true;
-					false
-				}
-			})
-		});
+		let found = self
+			.with_config(|broadcaster| broadcaster.write().unwrap().remove_where(|service| *service.service_type() != service_type))
+			.unwrap_or(false);
 
 		Ok(found)
 	}
@@ -122,6 +114,6 @@ impl BroadcasterHandle {
 	///
 	/// Returns `true` if the service was found and removed, and `false` if it was not found.
 	pub fn remove_service(&self, service: &Service) {
-		self.with_config(|broadcaster| broadcaster.write().unwrap().services.remove(service));
+		self.with_config(|broadcaster| broadcaster.write().unwrap().remove_where(|s| **s != *service));
 	}
 }

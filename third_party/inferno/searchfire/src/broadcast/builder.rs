@@ -84,15 +84,13 @@ impl BroadcasterBuilder {
 					.map_err(|(v4, v6)| BroadcasterBuilderError::MultiIpIoError(MultiIpIoError::Both { v4, v6 }))?,
 			},
 
-			config: Arc::new(RwLock::new(BroadcasterConfig {
-				services: {
-					let mut dns_services = BTreeSet::new();
-					for service in services {
-						dns_services.replace(ServiceDnsResponse::try_from(service)?);
-					}
-					dns_services
-				},
-			})),
+			config: Arc::new(RwLock::new(BroadcasterConfig::new({
+				let mut dns_services = BTreeSet::new();
+				for service in services {
+					dns_services.replace(ServiceDnsResponse::try_from(service)?);
+				}
+				dns_services
+			}))),
 		})
 	}
 }
