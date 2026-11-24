@@ -85,12 +85,31 @@ struct Flow {
   // Virgil patch: a packet was sent since the last (re)bootstrap. Until then
   // a big lag or clock jump is the flow starting, not a dropout.
   running: bool,
+  // Virgil patch: frames by which this flow's packets go out later than the
+  // send delay (computed for tx_max_fpp-frame packets) covers: a packet of
+  // fpp > tx_max_fpp frames can only go once its last frame is mixed.
+  // next_ts stays the send time; the frames sent (and their timestamp) are
+  // this much earlier.
+  extra_delay: usize,
+}
+
+/// Virgil patch: how much later than the send delay a packet of `fpp`
+/// frames has to go out.
+fn extra_delay_frames(fpp: usize) -> usize {
+  fpp.saturating_sub(tx_max_fpp() as usize)
+}
+
+/// Virgil patch: the first send time after `now` of a flow whose packets
+/// carry frames starting on `fpp` boundaries, sent `delay` frames after them.
+fn first_send_ts(now: LongClock, fpp: usize, delay: usize) -> LongClock {
+  let base = now.wrapping_sub(delay as LongClock);
+  let remainder = base % (fpp as LongClock);
+  base.wrapping_add(fpp as LongClock - remainder).wrapping_add(delay as LongClock)
 }
 
 impl Flow {
   fn bootstrap_next_ts(&mut self, now: LongClock) {
-    let remainder = now % (self.fpp as LongClock);
-    self.next_ts = now.wrapping_add(self.fpp as LongClock - remainder);
+    self.next_ts = first_send_ts(now, self.fpp, self.extra_delay);
     self.running = false;
   }
   fn keep_alive(&mut self, now: Clock, sample_rate: u32) {
@@ -252,15 +271,17 @@ impl<P: ProxyToSamplesBuffer> FlowsTransmitterInternal<P> {
         pbuff[0] = 2u8; // ???
         // Virgil patch: label packets with the media time of the samples they
         // carry, i.e. now minus the send delay.
-        let packet_ts = flow
-          .next_ts
+        // Virgil patch: a long-packet flow sends extra_delay later; the frames
+        // it carries are the same as without it.
+        let frames_ts = flow.next_ts.wrapping_sub(flow.extra_delay as LongClock);
+        let packet_ts = frames_ts
           .wrapping_sub(self.send_latency_samples as LongClock)
           .wrapping_add_signed(self.clock_offset_samples) /* .wrapping_sub(flow.fpp) */; // ???
         let seconds = packet_ts / (sample_rate as LongClock);
         let subsec_samples = packet_ts % (sample_rate as LongClock);
         pbuff[1..5].copy_from_slice(&(seconds as u32).to_be_bytes());
         pbuff[5..9].copy_from_slice(&(subsec_samples as u32).to_be_bytes());
-        let start_ts = (flow.next_ts as Clock).wrapping_add_signed(self.timestamp_shift);
+        let start_ts = (frames_ts as Clock).wrapping_add_signed(self.timestamp_shift);
         for (index_in_flow, &ch_opt) in flow.channel_indices.iter().enumerate() {
           if let Some(ch_index) = ch_opt {
             //(self.callback)(flow.next_ts, ch_index, &mut tmp_samples[0..flow.fpp]);
@@ -556,7 +577,14 @@ impl<P: ProxyToSamplesBuffer> FlowsTransmitterInternal<P> {
             expires: if needs_keepalives { Some(0) } else { None },
             expired,
             running: false,
+            extra_delay: extra_delay_frames(fpp),
           };
+          if flow.extra_delay > 0 {
+            info!(
+              "flow index={index}: {fpp}-frame packets, sent {} frames after the usual send delay",
+              flow.extra_delay
+            );
+          }
           if let Some(now) = self.now() {
             flow.bootstrap_next_ts(now);
             if needs_keepalives {
@@ -656,8 +684,23 @@ impl FlowsTransmitter {
       if fpp < FPP_MIN as usize || fpp > FPP_MAX as usize {
         return invalid(&format!("{fpp} frames per packet"));
       }
-      if fpp > tx_max_fpp() as usize {
-        return invalid(&format!("{fpp} frames per packet, more than the {} this device sends", tx_max_fpp()));
+      // Virgil patch: longer packets than tx_max_fpp go out later (by the
+      // extra frames), so they reach the receiver after Virgil's transmit
+      // latency. Accept them while that stays within half the latency Virgil
+      // advertises to receivers (they buffer at least that much). Receivers
+      // that learned a longer packet size (e.g. before a switch to the LowLat
+      // preset) keep asking for it for a minute or more; refusing them left
+      // the subscription red that long.
+      let extra_ns = extra_delay_frames(fpp) as u64 * 1_000_000_000 / self.self_info.sample_rate.max(1) as u64;
+      let budget_ns = self.self_info.latency_ns.min(4_000_000) as u64 / 2;
+      if extra_ns > budget_ns {
+        return invalid(&format!(
+          "{fpp} frames per packet: {} more than the {} this device sends, which would arrive {} us late (at most {} us)",
+          extra_delay_frames(fpp),
+          tx_max_fpp(),
+          extra_ns / 1000,
+          budget_ns / 1000
+        ));
       }
     }
     if let (Some(fpp), Some(bps)) = (fpp, bytes_per_sample) {
@@ -981,6 +1024,28 @@ impl FlowsTransmitter {
 #[cfg(test)]
 mod tests {
   use super::late_skip_samples;
+
+  #[test]
+  fn first_send_ts_without_delay_is_next_packet_boundary() {
+    use super::first_send_ts;
+    assert_eq!(first_send_ts(100, 16, 0), 112);
+    assert_eq!(first_send_ts(112, 16, 0), 128); // as Inferno: strictly after now
+  }
+
+  #[test]
+  fn first_send_ts_with_delay_keeps_frames_on_boundaries() {
+    use super::first_send_ts;
+    // 32-frame packets sent 16 frames late: frames start at 96, sent at 112.
+    let ts = first_send_ts(100, 32, 16);
+    assert_eq!(ts, 112);
+    assert_eq!((ts - 16) % 32, 0);
+    assert!(ts > 100);
+    for now in 0..200u64 {
+      let ts = first_send_ts(now, 32, 16);
+      assert_eq!((ts - 16) % 32, 0, "now {now}");
+      assert!(ts > now && ts <= now + 32, "now {now} ts {ts}");
+    }
+  }
 
   #[test]
   fn tx_max_fpp_is_clamped_and_resets() {

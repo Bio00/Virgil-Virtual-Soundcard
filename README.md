@@ -389,10 +389,13 @@ part only: the network adds the transmit latency and the receiver's
 latency. Lower it step by step and keep it where playback has no dropouts.
 
 Shorter packets mean more of them (16 frames at 48 kHz: 3000 per second
-per flow; 8 frames: 6000), so check the receiving devices accept the size:
-a receiver that only takes longer packets is refused (logged as *refusing tx
-flow*). Dante's own latency floor on hardware is 0.25 ms; a computer stays
-above it because of scheduling jitter.
+per flow; 8 frames: 6000), so check the receiving devices accept the size.
+A receiver that asks for longer packets (some keep the size they learned
+before a switch to LowLat for a minute or more) gets them, sent later by
+the extra frames, as long as that delay stays within half the receive
+latency Virgil advertises (0.5 ms at 1 ms); beyond that it is refused
+(logged as *refusing tx flow*). Dante's own latency floor on hardware is
+0.25 ms; a computer stays above it because of scheduling jitter.
 
 On macOS the Dante network threads (sending and receiving) now run with
 the Core Audio time-constraint policy; they used to fall back to normal
