@@ -59,6 +59,15 @@ const BUFFERED_SAMPLES_PER_CHANNEL: usize = 65536;
 pub const SELECT_THRESHOLD: Duration = Duration::from_millis(100);
 pub const PROCESS_EVENTS_INTERVAL: Duration = Duration::from_millis(33);
 pub const MIN_SLEEP: Duration = Duration::from_millis(0); // to save CPU cycles, TODO: make it configurable via some "eco mode" flag
+/// Virgil patch: the longest the thread sleeps before looking at the clock
+/// again. When the media clock steps backwards (an engine restart, before
+/// PTP locks to the Dante leader and steps the clock by decades), a flow's
+/// next packet time lies far in the future: the thread slept until then,
+/// only woken by commands that do not transmit, so the flow never sent
+/// again and receivers re-requested it forever (patch had to be redone by
+/// hand). Waking at least this often lets transmit() see the discontinuity
+/// and realign the flow.
+pub const MAX_IDLE_SLEEP: Duration = Duration::from_millis(500);
 
 // it's better to have the clock in the past than in the future - otherwise Dante devices receiving from us go mad and fart
 pub const CLOCK_OFFSET_NS: ClockDiff = -500_000;
@@ -493,7 +502,7 @@ impl<P: ProxyToSamplesBuffer> FlowsTransmitterInternal<P> {
           recv_opt = self.commands_receiver.recv() => {
             recv_opt.unwrap_or(Command::Shutdown)
           },
-          _ = tokio::time::sleep(sleep_duration) => {
+          _ = tokio::time::sleep(sleep_duration.min(MAX_IDLE_SLEEP)) => {
             if let Some(now) = self.now() {
               self.transmit(&mut dither_rng, now, true);
             } else {
