@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+## 0.8.5
+- **Virgil Control no longer closes when macOS cannot supply a font** (macOS): on a very busy Mac the font call can fail, and the meter window ended the app. Fonts are made once, with fallbacks.
+
 ## 0.8.4
 - **Updates install from Virgil Control** (macOS): *Download and Install* downloads the new version, checks its SHA-256, installs it (administrator password) and reopens the app.
 - **Renamed transmit channels can be subscribed again**, whatever the start order: the saved names are advertised on mDNS.

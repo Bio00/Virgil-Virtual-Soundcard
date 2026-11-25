@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(virgil VERSION 0.8.4 LANGUAGES C CXX)
+project(virgil VERSION 0.8.5 LANGUAGES C CXX)
 # Marks a patched build in the version Virgil shows (e.g. -DVIRGIL_VERSION_SUFFIX=-dcfix
 # shows 0.8.3-dcfix); the numeric version used by packages and bundles stays.
 # Defaults to the VIRGIL_BUILD_SUFFIX environment variable, so every platform's
