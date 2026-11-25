@@ -162,16 +162,35 @@ NSColor* color(unsigned c, float a = 1.f) {
                              alpha:a];
 }
 
-NSFont* font(vc::Font f) {
+// May return nil: AppKit's font calls can, e.g. while the Mac is so busy that
+// the font service does not answer.
+NSFont* make_font(vc::Font f) {
   switch (f) {
     case vc::Font::Title: return [NSFont systemFontOfSize:17 weight:NSFontWeightSemibold];
     case vc::Font::Big: return [NSFont systemFontOfSize:15 weight:NSFontWeightSemibold];
     case vc::Font::Small: return [NSFont systemFontOfSize:10.5];
     case vc::Font::Mono:
       if (@available(macOS 10.15, *)) return [NSFont monospacedSystemFontOfSize:11 weight:NSFontWeightRegular];
-      return [NSFont fontWithName:@"Menlo" size:11] ?: [NSFont systemFontOfSize:11];
+      return [NSFont fontWithName:@"Menlo" size:11];
     default: return [NSFont systemFontOfSize:12];
   }
+}
+
+// Each font is made once (the window redraws about 12 times a second). Main
+// thread only. nil when no font at all could be made: the caller draws nothing
+// and the next redraw tries again.
+NSFont* font(vc::Font f) {
+  static NSMutableDictionary<NSNumber*, NSFont*>* made = [NSMutableDictionary dictionary];
+  NSNumber* key = @(int(f));
+  NSFont* r = made[key];
+  if (r) return r;
+  r = make_font(f);
+  if (r) {
+    made[key] = r;
+    return r;
+  }
+  // Not kept: the right one may be there at the next redraw.
+  return [NSFont userFixedPitchFontOfSize:11] ?: [NSFont systemFontOfSize:12] ?: [NSFont userFontOfSize:12];
 }
 
 // ---- CoreGraphics canvas (the view is flipped: y grows downwards) -------------------------
@@ -202,7 +221,10 @@ class MacCanvas : public vc::Canvas {
   }
   void text(const std::string& s, vc::Font f, const vc::Rect& r, unsigned c, vc::Align a) override {
     if (s.empty()) return;
-    NSDictionary* attrs = @{NSFontAttributeName : font(f), NSForegroundColorAttributeName : color(c)};
+    NSFont* fnt = font(f);
+    NSColor* col = color(c);
+    if (!fnt || !col) return;
+    NSDictionary* attrs = @{NSFontAttributeName : fnt, NSForegroundColorAttributeName : col};
     NSString* str = ns(s);
     const NSSize sz = [str sizeWithAttributes:attrs];
     CGFloat x = r.l;
@@ -216,7 +238,9 @@ class MacCanvas : public vc::Canvas {
   }
   float text_width(const std::string& s, vc::Font f) override {
     if (s.empty()) return 0;
-    return float([ns(s) sizeWithAttributes:@{NSFontAttributeName : font(f)}].width);
+    NSFont* fnt = font(f);
+    if (!fnt) return 0;
+    return float([ns(s) sizeWithAttributes:@{NSFontAttributeName : fnt}].width);
   }
   void logo(const vc::Rect& r) override {
     if (!g_logo) return;

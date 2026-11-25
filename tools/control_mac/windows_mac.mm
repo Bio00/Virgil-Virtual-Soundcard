@@ -37,7 +37,10 @@ void on_main(void (^block)(void)) {
 dispatch_queue_t background() { return dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0); }
 
 NSFont* mono_font(CGFloat size) {
-  if (@available(macOS 10.15, *)) return [NSFont monospacedSystemFontOfSize:size weight:NSFontWeightRegular];
+  if (@available(macOS 10.15, *)) {  // can be nil on a very busy Mac
+    NSFont* f = [NSFont monospacedSystemFontOfSize:size weight:NSFontWeightRegular];
+    if (f) return f;
+  }
   return [NSFont fontWithName:@"Menlo" size:size] ?: [NSFont systemFontOfSize:size];
 }
 
@@ -150,7 +153,7 @@ void bring_forward(NSWindow* w) {
 }
 - (NSDictionary*)attrs {
   return @{
-    NSFontAttributeName : [NSFont systemFontOfSize:13 weight:NSFontWeightSemibold],
+    NSFontAttributeName : [NSFont systemFontOfSize:13 weight:NSFontWeightSemibold] ?: [NSFont userFontOfSize:13] ?: mono_font(13),
     NSForegroundColorAttributeName : rgb(_color),
   };
 }
@@ -285,7 +288,7 @@ VWDiagnostics* g_diagnostics = nil;  // the open window, if any
   _chart.translatesAutoresizingMaskIntoConstraints = NO;
   [_chart.heightAnchor constraintEqualToConstant:64].active = YES;
 
-  NSFont* small = [NSFont systemFontOfSize:11];
+  NSFont* small = [NSFont systemFontOfSize:11] ?: [NSFont userFontOfSize:11] ?: mono_font(11);
   NSMutableArray<NSView*>* legend = [NSMutableArray array];
   [legend addObject:dim(label("last 60 minutes, per minute:"))];
   ((NSTextField*)legend[0]).font = small;
