@@ -114,3 +114,10 @@ Changes for Virgil:
     * The gap counter no longer counts reordering as loss: a hole is only
       reported once the stream is a receive latency past it (or a newer hole
       opens), and reordered packets at its edges shrink it first.
+16. Dante Controller parity (`info_mcast_server.rs`, `arc_server.rs`,
+    `protocol/mcast.rs`, `settings.rs`, `channels_subscriber.rs`, new
+    `util/if_stats.rs`): configurable manufacturer and board name, full-length
+    names, clock status with the PTP port state and sent when it changes,
+    interface utilization in the heartbeat (bytes per second), routing-ready,
+    flow and transmit channel change notifications, no empty ones, and
+    answers to 0x2204 and 0x3210. Layouts from a Yamaha NY64-D's answers.

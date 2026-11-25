@@ -416,6 +416,12 @@ impl<P: ProxyToSamplesBuffer + Sync + Send + 'static, B: ChannelsBuffering<P>>
     };
   }
   async fn notify_channels_change(&self, channel_indices: impl IntoIterator<Item = usize>) {
+    // Virgil patch: nothing changed, nothing to tell (Dante Controller asked
+    // for all channels again).
+    let channel_indices = channel_indices.into_iter().collect_vec();
+    if channel_indices.is_empty() {
+      return;
+    }
     self.mcast.send(make_channel_change_notification(channel_indices)).await.log_and_forget();
   }
   pub async fn unsubscribe(&mut self, local_channel_index: usize, remove_from_info: bool) {

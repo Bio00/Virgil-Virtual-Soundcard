@@ -47,7 +47,22 @@ pub struct MulticastMessage {
   pub content: Vec<u8>,
 }
 
+// Virgil patch: notifications Dante Controller refreshes its view on.
+pub const TX_CHANNEL_CHANGE: u16 = 0x0101;
+pub const RX_CHANNEL_CHANGE: u16 = 0x0102;
+pub const TX_LABEL_CHANGE: u16 = 0x0103;
+pub const TX_FLOW_CHANGE: u16 = 0x0104;
+pub const RX_FLOW_CHANGE: u16 = 0x0105;
+
 pub fn make_channel_change_notification(
+  channel_indices: impl IntoIterator<Item = usize>,
+) -> MulticastMessage {
+  make_change_notification(RX_CHANNEL_CHANGE, channel_indices)
+}
+
+/// Channels or flows (by index) that changed, as a bit mask.
+pub fn make_change_notification(
+  kind: u16,
   channel_indices: impl IntoIterator<Item = usize>,
 ) -> MulticastMessage {
   let mut content = vec![0u8; 3];
@@ -63,7 +78,7 @@ pub fn make_channel_change_notification(
   let mask_len = (content.len() - 2).try_into().unwrap();
   content[0] = H(mask_len);
   content[1] = L(mask_len);
-  MulticastMessage { start_code: 0xffff, opcode: [0x07, 0x2a, 1, 2, 0, 0, 0, 0], content }
+  MulticastMessage { start_code: 0xffff, opcode: [0x07, 0x2a, H(kind), L(kind), 0, 0, 0, 0], content }
 }
 
 #[cfg(test)]

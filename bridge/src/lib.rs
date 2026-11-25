@@ -503,6 +503,14 @@ pub unsafe extern "C" fn vg_dante_start(config: *const VgDanteConfig) -> *mut st
     // own latency starts counting, whatever its latency setting (as Dante
     // Virtual Soundcard does; the latency shows up as our output latency).
     cfg.insert("TX_TIMESTAMP_OFFSET_NS".to_owned(), c.tx_latency_ns.to_string());
+    // Shown in Dante Controller (Device Info, Status).
+    cfg.insert("MANUFACTURER".to_owned(), "Virgil".to_owned());
+    let os = match std::env::consts::OS {
+        "macos" => "macOS",
+        "windows" => "Windows",
+        _ => "Linux",
+    };
+    cfg.insert("BOARD_NAME".to_owned(), format!("Virgil Virtual Soundcard {os}"));
     if c.alt_port != 0 {
         cfg.insert("ALT_PORT".to_owned(), c.alt_port.to_string());
     }
@@ -535,7 +543,7 @@ pub unsafe extern "C" fn vg_dante_start(config: *const VgDanteConfig) -> *mut st
         let ready_tx2 = ready_tx.clone();
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             rt.block_on(async move {
-                let settings = Settings::new("Virgil", "Virgil", ip, &cfg);
+                let settings = Settings::new("Virgil Virtual Soundcard", "Virgil", ip, &cfg);
                 let mut server = DeviceServer::start(settings).await;
                 if rx_ch > 0 {
                     let (t, r) = tokio::sync::oneshot::channel();

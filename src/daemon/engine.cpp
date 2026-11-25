@@ -625,7 +625,8 @@ void Engine::tick_loop() {
 }
 
 // Dante Controller's clock status needs the leader's identity. PTPv1 uses
-// 6-byte clock UUIDs; Dante shows them as EUI-64 (ff:fe in the middle).
+// 6-byte clock UUIDs; Dante devices send them followed by two zero bytes (as
+// an EUI-64 with ff:fe, Dante Controller showed "Unknown Device" as leader).
 void Engine::report_clock_master() {
   if (!dante_) return;
   // Reported as soon as Virgil follows (or is) a leader, like Dante devices
@@ -636,9 +637,7 @@ void Engine::report_clock_master() {
                                 &b[4], &b[5]) == 6;
   uint8_t id[8] = {};
   if (have) {
-    id[0] = uint8_t(b[0]); id[1] = uint8_t(b[1]); id[2] = uint8_t(b[2]);
-    id[3] = 0xff; id[4] = 0xfe;
-    id[5] = uint8_t(b[3]); id[6] = uint8_t(b[4]); id[7] = uint8_t(b[5]);
+    for (int i = 0; i < 6; ++i) id[i] = uint8_t(b[i]);
   }
   if (have == reported_master_ && std::memcmp(id, reported_id_, 8) == 0) return;
   reported_master_ = have;

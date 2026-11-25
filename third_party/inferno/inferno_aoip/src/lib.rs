@@ -102,6 +102,7 @@ mod state_storage;
 mod util;
 
 pub use util::bytes as byte_utils;
+pub use util::if_stats;
 pub use util::net as net_utils;
 
 pub mod utils {

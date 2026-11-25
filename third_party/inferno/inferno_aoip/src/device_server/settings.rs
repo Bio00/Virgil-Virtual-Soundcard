@@ -134,8 +134,9 @@ fn create_self_info(
     // report a speed; Dante Controller then shows the link as down.
     link_speed: if speed == 0 { 1000 } else { speed.clamp(0, 10000).try_into().unwrap() },
 
-    board_name: "Inferno-AoIP".to_owned(),
-    manufacturer: "Inferno-AoIP".to_owned(),
+    // Virgil patch: the embedding program's name in Dante Controller.
+    board_name: settings.get("BOARD_NAME").cloned().unwrap_or("Inferno-AoIP".to_owned()),
+    manufacturer: settings.get("MANUFACTURER").cloned().unwrap_or("Inferno-AoIP".to_owned()),
     model_name: app_name.to_owned(),
     factory_device_id: devid,
     process_id,

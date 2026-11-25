@@ -774,6 +774,7 @@ dependencies = [
  "hex",
  "interprocess",
  "itertools",
+ "libc",
  "local-ip-address",
  "log",
  "mio",

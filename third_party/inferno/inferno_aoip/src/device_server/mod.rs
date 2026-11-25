@@ -143,6 +143,7 @@ impl DeviceServer {
       tokio::spawn(cmc_server::run_server(self_info.clone(), shdn_recv2)),
       tokio::spawn(info_mcast_server::run_server(
         self_info.clone(),
+        flows_tx.clone(),
         mcast_rx,
         shared_media_clock.clone(),
         channels_sub_rx,

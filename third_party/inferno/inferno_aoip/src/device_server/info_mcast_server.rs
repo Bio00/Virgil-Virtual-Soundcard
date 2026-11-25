@@ -1,10 +1,11 @@
 use super::channels_subscriber::ChannelsSubscriber;
+use super::flows_tx::FlowsTransmitter;
 use super::remote_config::{self, RemoteSetting, SettingsRequest};
 use crate::byte_utils::*;
 use crate::common::*;
 use crate::media_clock::MediaClock;
 use crate::net_utils::UdpSocketWrapper;
-use crate::protocol::mcast::{make_packet, MulticastMessage};
+use crate::protocol::mcast::{make_change_notification, make_packet, MulticastMessage, RX_FLOW_CHANGE, TX_FLOW_CHANGE};
 use crate::{byte_utils::write_str_to_buffer, device_info::DeviceInfo};
 use bytebuffer::ByteBuffer;
 use std::sync::atomic::Ordering;
@@ -83,6 +84,51 @@ struct Multicaster<'s> {
   // Virgil patch: a sample rate Dante Controller chose, until the engine
   // restarts with it (shown as "pending").
   pending_sample_rate: Option<u32>,
+  // Virgil patch: what Dante Controller was last told, to tell it of changes.
+  if_stats: crate::if_stats::Monitor,
+  told_clock: Option<Option<[u8; 8]>>,
+  tx_flows_seen: Vec<Option<u64>>,
+  rx_flows_seen: Vec<Option<u64>>,
+}
+
+/// Clock status (opcode ...0020). After the leader ids, as a Dante card sends
+/// it: one PTP port with its IEEE 1588 state (6 leader, 9 follower), shown in
+/// Dante Controller's "Primary v1 Multicast".
+fn clock_status_content(mac: [u8; 6], freq_offset: i32, leader: Option<[u8; 8]>) -> Vec<u8> {
+  let mut own = [0u8; 8];
+  own[..6].copy_from_slice(&mac);
+  let servo: u8 = if leader.is_some() { 3 } else { 1 }; // 1 = not locked
+  let port_state: u8 = match leader {
+    Some(l) if l == own => 6,
+    Some(_) => 9,
+    None => 4, // listening
+  };
+  let mut c = vec![0x00, 0x03, 0x00, servo, 0x00, 0x00, 0x00, 0x9f];
+  c.extend_from_slice(&freq_offset.to_be_bytes());
+  c.extend_from_slice(&own);
+  let l = leader.unwrap_or([0; 8]);
+  c.extend_from_slice(&l);
+  c.extend_from_slice(&l);
+  c.extend_from_slice(&[0x00, 0x01, 0x00, 0x34, 0x00, port_state]);
+  c.resize(112, 0);
+  c
+}
+
+fn signature<T: std::hash::Hash>(v: &T) -> u64 {
+  use std::hash::Hasher;
+  let mut h = std::collections::hash_map::DefaultHasher::new();
+  v.hash(&mut h);
+  h.finish()
+}
+
+/// Indices that differ; updates `seen`.
+fn changed_flows(seen: &mut Vec<Option<u64>>, now: Vec<Option<u64>>) -> Vec<usize> {
+  let n = seen.len().max(now.len());
+  let changed = (0..n)
+    .filter(|&i| seen.get(i).copied().flatten() != now.get(i).copied().flatten())
+    .collect();
+  *seen = now;
+  changed
 }
 
 impl<'s> Multicaster<'s> {
@@ -120,6 +166,10 @@ impl<'s> Multicaster<'s> {
       had_clock: false,
       unknown_logged: vec![],
       pending_sample_rate: None,
+      if_stats: crate::if_stats::Monitor::new(self_info.ip_address),
+      told_clock: None,
+      tx_flows_seen: vec![],
+      rx_flows_seen: vec![],
     };
     if let Some((major, minor, patch)) = *PRODUCT_VERSION.lock().unwrap() {
       r.product_version_bytes = [major, minor, H(patch), L(patch)];
@@ -152,11 +202,8 @@ impl<'s> Multicaster<'s> {
     // Firmware version:
     content[0..4].copy_from_slice(&[4, 1, 0, 6]);
     content[0x23] = 2;
-    // Hardware version:
-    content[4..8].copy_from_slice(&[4, 1, 0, 3]);
-    content[0x27] = 1;
-    // Boot version:
-    content[0x28..0x2c].copy_from_slice(&[1, 0, 0, 0]);
+    // Virgil patch: no hardware (4..8, 0x24..0x28) or boot (0x28..0x2c)
+    // version, a software device has none.
 
     // flags of supported features:
     // 0x14: AES67, Device Lock
@@ -180,7 +227,7 @@ impl<'s> Multicaster<'s> {
                           content[0xc3] = 3;
                           content[0xc7] = 3; */
     write_str_to_buffer(&mut content, 12, 8, &self.self_info.board_name);
-    write_str_to_buffer(&mut content, 0x38, 16, &self.self_info.board_name);
+    write_str_to_buffer(&mut content, 0x38, 127, &self.self_info.board_name);
 
     self.send(self.device_info_destination, 0xffff, [0x07, 0x2a, 0x00, 0x60, 0, 0, 0, 0], &content).await;
   }
@@ -189,15 +236,14 @@ impl<'s> Multicaster<'s> {
     let mut content = [0; 336];
     write_str_to_buffer(&mut content, 0, 8, &self.self_info.manufacturer);
     write_str_to_buffer(&mut content, 8, 8, &self.self_info.board_name);
-    write_str_to_buffer(&mut content, 0x2c, 16, &self.self_info.manufacturer);
-    write_str_to_buffer(&mut content, 0xac, 16, &self.self_info.model_name);
+    write_str_to_buffer(&mut content, 0x2c, 127, &self.self_info.manufacturer);
+    write_str_to_buffer(&mut content, 0xac, 127, &self.self_info.model_name);
     // product version:
-    //content[0x12c..0x130].copy_from_slice(&self.product_version_bytes);
+    content[0x12c..0x130].copy_from_slice(&self.product_version_bytes);
 
-    // firmware version:
-    content[0x1c..0x20].copy_from_slice(&self.product_version_bytes);
+    // software version (a software device has no firmware, 0x1c..0x1f):
+    content[0x18..0x1c].copy_from_slice(&self.product_version_bytes);
 
-    // 0x18..0x1b - software version
     // 0x24..0x26 - software patch version, u32
     // 0x28..0x2b - firmware patch version, u32
 
@@ -228,6 +274,16 @@ impl<'s> Multicaster<'s> {
     bytes.set_endian(bytebuffer::Endian::BigEndian);
 
     let freq_offset_opt = self.get_freq_offset_ppb();
+
+    // Virgil patch: interface utilization (bytes per second) and errors.
+    if let Some(u) = self.if_stats.update() {
+      bytes.write_bytes(&[0x00, 0x24, 0x80, 0x00, 0x00, 0x04, 0x00, 0x04, H(ctr), L(ctr), 0x00, 0x00]);
+      bytes.write_bytes(&[0x00, 0x10, 0x00, 0x00, 0x00, 0x01, 0x00, 0x10]);
+      bytes.write_u32(u.tx_rate);
+      bytes.write_u32(u.rx_rate);
+      bytes.write_u32(u.tx_errors);
+      bytes.write_u32(u.rx_errors);
+    }
 
     if let Some(freq_offset) = freq_offset_opt {
       bytes.write_u16(16); // length of this part
@@ -412,39 +468,80 @@ impl<'s> Multicaster<'s> {
     }
   }
 
+  /// The leader Dante Controller is told of; None when not synchronized.
+  fn clock_leader(&self) -> Option<[u8; 8]> {
+    self.get_freq_offset_ppb()?;
+    let reported = *CLOCK_MASTER.lock().unwrap();
+    reported.or_else(|| {
+      let required_prefix = format!("clock-stats.{}0000", hex::encode(self.self_info.mac_address.octets()));
+      read_clock_stats_file(&required_prefix).and_then(|v| v.try_into().ok())
+    })
+  }
+
   async fn send_clock_stats(&mut self) {
-    let freq_offset = if let Some(f) = self.get_freq_offset_ppb() {
-      f
-    } else {
-      return;
-    };
-    let required_prefix = format!("clock-stats.{}0000", hex::encode(self.self_info.mac_address.octets()));
-    let mut master_clock = CLOCK_MASTER.lock().unwrap().map(|id| id.to_vec());
-    if master_clock.is_none() {
-      master_clock = read_clock_stats_file(&required_prefix);
+    let leader = self.clock_leader();
+    let content = clock_status_content(
+      self.self_info.mac_address.octets(),
+      self.get_freq_offset_ppb().unwrap_or(0),
+      leader,
+    );
+    self.told_clock = Some(leader);
+    self
+      .send(self.device_info_destination, 0xffff, [0x07, 0x2a, 0x00, 0x20, 0, 0, 0, 0], &content)
+      .await;
+  }
+
+  // Virgil patch: "routing ready", as a Dante device sends when it starts:
+  // Dante Controller asks for channels and subscriptions at once.
+  async fn send_routing_ready(&mut self) {
+    let mut content = vec![1u8, 1, 0, 0];
+    content.extend_from_slice(&(self.self_info.tx_channels.len() as u16).to_be_bytes());
+    content.extend_from_slice(&(self.self_info.rx_channels.len() as u16).to_be_bytes());
+    self
+      .send(self.device_info_destination, 0xffff, [0x07, 0x2a, 0x01, 0x00, 0, 0, 0, 0], &content)
+      .await;
+  }
+
+  // Virgil patch: tell Dante Controller about a changed clock leader and
+  // changed flows, instead of waiting until it asks.
+  async fn send_changes(&mut self, flows_tx: &tokio::sync::Mutex<Option<FlowsTransmitter>>) {
+    if self.told_clock != Some(self.clock_leader()) {
+      self.send_clock_stats().await;
     }
-    if let Some(mc) = master_clock {
-      assert_eq!(mc.len(), 8);
-      let mut bytes = ByteBuffer::new();
-      bytes.set_endian(bytebuffer::Endian::BigEndian);
-      bytes.write_bytes(&[
-        0x00, 0x03, 0x00, 0x03, /* 0x01 = PLL not locked */
-        0x00, 0x00, 0x00, 0x9f, /* was 0xff */
-      ]);
-      bytes.write_i32(freq_offset);
-      bytes.write_bytes(&self.self_info.mac_address.octets());
-      bytes.write_u16(0);
-      bytes.write_bytes(&mc);
-      bytes.write_bytes(&mc);
-      bytes.write_bytes(&[0u8; 76]);
-      self
-        .send(
-          self.device_info_destination,
-          0xffff,
-          [0x07, 0x2a, 0x00, 0x20, 0x00, 0x00, 0x00, 0x00],
-          bytes.as_bytes(),
-        )
-        .await;
+    let mut messages = vec![];
+    // Busy (a flow is being added): look again at the next heartbeat.
+    if let Ok(tx) = flows_tx.try_lock() {
+      let now = tx.as_ref().map_or(vec![], |tx| {
+        tx.get_flows_info()
+          .iter()
+          .map(|f| f.as_ref().map(|f| signature(&(f.dst_addr, f.dst_port, &f.local_channel_indices))))
+          .collect()
+      });
+      let changed = changed_flows(&mut self.tx_flows_seen, now);
+      if !changed.is_empty() {
+        messages.push(make_change_notification(TX_FLOW_CHANGE, changed));
+      }
+    }
+    let now = self.channels_subscriber.as_ref().map_or(vec![], |s| {
+      let flows = s.flows_info();
+      let flows = flows.read().unwrap_or_else(|e| e.into_inner());
+      flows
+        .iter()
+        .map(|f| {
+          f.as_ref().map(|f| {
+            let map: Vec<Vec<bool>> =
+              f.channels_map.iter().map(|m| (0..m.len()).map(|i| m.get(i).unwrap_or(false)).collect()).collect();
+            signature(&(f.rx_port, map))
+          })
+        })
+        .collect()
+    });
+    let changed = changed_flows(&mut self.rx_flows_seen, now);
+    if !changed.is_empty() {
+      messages.push(make_change_notification(RX_FLOW_CHANGE, changed));
+    }
+    for m in messages {
+      self.send(self.device_info_destination, m.start_code, m.opcode, &m.content).await;
     }
   }
 
@@ -477,6 +574,7 @@ impl<'s> Multicaster<'s> {
 
 pub async fn run_server(
   self_info: Arc<DeviceInfo>,
+  flows_tx: Arc<tokio::sync::Mutex<Option<FlowsTransmitter>>>,
   mut rx: mpsc::Receiver<MulticastMessage>,
   clock: Arc<RwLock<MediaClock>>,
   mut channels_sub_rx: watch::Receiver<Option<Arc<ChannelsSubscriber>>>,
@@ -489,6 +587,7 @@ pub async fn run_server(
   let mut mcaster = Multicaster::new(self_info.as_ref(), server, clock, get_peaks);
   mcaster.send_board_info().await;
   mcaster.send_product_info().await;
+  mcaster.send_routing_ready().await;
   let mut heartbeat_interval = interval(Duration::from_secs(1));
   heartbeat_interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
   while mcaster.should_work() {
@@ -556,11 +655,41 @@ pub async fn run_server(
       },
       _ = heartbeat_interval.tick() => {
         mcaster.send_heartbeat().await;
+        mcaster.send_changes(&flows_tx).await;
       },
       _ = channels_sub_rx.changed() => {
         mcaster.channels_subscriber = channels_sub_rx.borrow_and_update().clone();
       }
       // TODO receive shutdown properly, currently Ctrl-C doesn't work if there is error binding to socket
     };
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn clock_status_layout() {
+    let mac = [0x00, 0x1d, 0xc1, 1, 2, 3];
+    let own = [0x00, 0x1d, 0xc1, 1, 2, 3, 0, 0];
+    for (leader, servo, state) in [(Some([9u8; 8]), 3, 9), (Some(own), 3, 6), (None, 1, 4)] {
+      let c = clock_status_content(mac, -5, leader);
+      assert_eq!(c.len(), 112);
+      assert_eq!(c[3], servo);
+      assert_eq!(&c[12..20], &own);
+      assert_eq!(&c[20..28], &leader.unwrap_or([0; 8]));
+      assert_eq!(&c[36..42], &[0, 1, 0, 0x34, 0, state]);
+    }
+  }
+
+  #[test]
+  fn changed_flows_reports_each_change_once() {
+    let mut seen = vec![];
+    assert!(changed_flows(&mut seen, vec![None, None]).is_empty());
+    assert_eq!(changed_flows(&mut seen, vec![None, Some(1)]), vec![1]);
+    assert!(changed_flows(&mut seen, vec![None, Some(1)]).is_empty());
+    assert_eq!(changed_flows(&mut seen, vec![Some(2), Some(3)]), vec![0, 1]);
+    assert_eq!(changed_flows(&mut seen, vec![]), vec![0, 1]);
   }
 }

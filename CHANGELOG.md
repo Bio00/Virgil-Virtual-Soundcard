@@ -1,6 +1,13 @@
 # Changelog
 
 ## Unreleased
+- **Dante Controller shows Virgil as it shows Dante Virtual Soundcard.** Checked against a Yamaha NY64-D and Dante Controller 4.18:
+  - Virgil's own name, model and version instead of "Inferno-AoIP", and no made-up hardware and boot versions.
+  - The clock leader is the right device: with Virgil on the network, Dante Controller showed "Unknown Device*" as a second primary leader.
+  - Clock Status shows Follower or Leader (was N/A) and is told of changes, including the loss of the clock.
+  - Network utilization and errors of the interface (macOS and Linux).
+  - Changed flows and renamed transmit channels show at once, and a restarted Virgil is asked for its channels at once; notifications without any change are no longer sent.
+  - No more "Timed out 3 times sending message 'UpdateTxFlows'" in the event log.
 
 ## 0.8.5
 - **Virgil Control no longer closes when macOS cannot supply a font** (macOS): on a very busy Mac the font call can fail, and the meter window ended the app. Fonts are made once, with fallbacks.

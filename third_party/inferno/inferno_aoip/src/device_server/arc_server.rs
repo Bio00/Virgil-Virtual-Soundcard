@@ -11,7 +11,9 @@ use super::mdns_server::DeviceMDNSResponder;
 use super::remote_config;
 use crate::device_info::DeviceInfo;
 use crate::net_utils::UdpSocketWrapper;
-use crate::protocol::mcast::make_channel_change_notification;
+use crate::protocol::mcast::{
+  make_change_notification, make_channel_change_notification, TX_CHANNEL_CHANGE, TX_LABEL_CHANGE,
+};
 use crate::protocol::mcast::MulticastMessage;
 use crate::protocol::proto_arc::*;
 use crate::protocol::req_resp::HEADER_LENGTH;
@@ -271,7 +273,7 @@ pub async fn run_server(
 
         rename_tx_channels::OPCODE => {
           let content = request.content();
-          let mut renamed_ids = deserialize_items::<rename_tx_channels::SingleChannelRenameRequest>(
+          let renamed_ids = deserialize_items::<rename_tx_channels::SingleChannelRenameRequest>(
             content,
           )
           .filter_map(|rename| {
@@ -302,11 +304,14 @@ pub async fn run_server(
                 None
               }
             }
-          });
-          let renamed_anything = renamed_ids.next().is_some();
-          renamed_ids.for_each(drop); // consume the whole iterator
+          }).collect_vec();
 
-          if renamed_anything {
+          if !renamed_ids.is_empty() {
+            // Virgil patch: other Dante Controllers show the new names at once.
+            for kind in [TX_CHANNEL_CHANGE, TX_LABEL_CHANGE] {
+              let indices = renamed_ids.iter().map(|id| *id as usize - 1);
+              mcast.send(make_change_notification(kind, indices)).await.log_and_forget();
+            }
             conn.respond_with_code(1, &[0, 0]).await;
             // sometimes it is [0, 1, 0, 0, H(channel_id), L(channel_id)], but it doesn't look necessary
           } else {
@@ -572,9 +577,15 @@ pub async fn run_server(
           }
         }
 
-        0x2320 => {
-          // ???
+        // Virgil patch: 0x2204 answered as Dante cards do (not supported)
+        // instead of left to time out.
+        0x2204 | 0x2320 => {
           conn.respond_with_code(0x30, &[]).await;
+        }
+
+        0x3210 => {
+          // Virgil patch: a Dante card answers OK with nothing.
+          conn.respond(&[]).await;
         }
 
         query_rx_flows::OPCODE => {
