@@ -816,6 +816,26 @@ TEST(update_check_picks_newer_release) {
   CHECK(!vc::pick_update("0.8.3", {}).available);
 }
 
+TEST(update_check_mac_installer) {
+  const std::string hex(64, 'a');
+  CHECK(vc::parse_sha256_digest("sha256:" + std::string(64, 'A')) == hex);
+  CHECK(vc::parse_sha256_digest("sha256:" + std::string(63, 'a') + "g").empty());
+  CHECK(vc::parse_sha256_digest("sha512:" + hex).empty() && vc::parse_sha256_digest("").empty());
+  const std::string base = "https://github.com/Bio00/Virgil-Virtual-Soundcard/releases/download/v1/";
+  vc::ReleaseInfo r;
+  vc::ReleaseAsset a;
+  r.assets = {{"Virgil-1-macos-portable.zip", base + "z", hex, 10}, {"Virgil-1-macos.pkg", base + "p", hex, 10}};
+  CHECK(vc::mac_installer(r, &a) && a.url == base + "p");
+  r.assets[1].sha256.clear();  // no checksum: not installed
+  CHECK(!vc::mac_installer(r, &a));
+  r.assets[1].sha256 = hex;
+  r.assets[1].url = "https://example.com/Virgil-1-macos.pkg";  // from elsewhere
+  CHECK(!vc::mac_installer(r, &a));
+  r.assets[1].url = base + "p";
+  r.assets[1].size = 0;
+  CHECK(!vc::mac_installer(r, &a));
+}
+
 TEST(low_latency_transmit_suggestion) {
   // Low-latency mode: 0.25 ms of margin over the worst lag, 0.125 ms steps.
   TxLatencyObservation o;

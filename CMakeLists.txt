@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(virgil VERSION 0.8.3 LANGUAGES C CXX)
+project(virgil VERSION 0.8.4 LANGUAGES C CXX)
 # Marks a patched build in the version Virgil shows (e.g. -DVIRGIL_VERSION_SUFFIX=-dcfix
 # shows 0.8.3-dcfix); the numeric version used by packages and bundles stays.
 # Defaults to the VIRGIL_BUILD_SUFFIX environment variable, so every platform's
@@ -124,7 +124,7 @@ if(APPLE)
   set_source_files_properties(branding/virgil.icns branding/virgil-256.png PROPERTIES
                               MACOSX_PACKAGE_LOCATION Resources)
   add_executable(virgil-control MACOSX_BUNDLE tools/control_mac/main.mm tools/control_mac/desktop_audio_mac.mm
-                 tools/control_mac/windows_mac.mm
+                 tools/control_mac/windows_mac.mm tools/control_mac/updater_mac.mm
                  tools/control_common/api.cpp tools/control_common/settings_model.cpp tools/control_common/update_check.cpp
                  tools/control_common/diagnostics_model.cpp tools/control_common/config_model.cpp
                  tools/control_common/view.cpp branding/virgil.icns branding/virgil-256.png)

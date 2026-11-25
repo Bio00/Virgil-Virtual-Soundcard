@@ -29,6 +29,7 @@
 #include "desktop_audio_mac.h"
 #include "settings_model.h"
 #include "update_check.h"
+#include "updater_mac.h"
 #include "view.h"
 #include "windows_mac.h"
 
@@ -841,12 +842,28 @@ RemoteInfo parse_remote(const std::string& status_body) {
                 ri.published_at = str(@"published_at");
                 ri.draft = [r[@"draft"] isKindOfClass:[NSNumber class]] && [r[@"draft"] boolValue];
                 ri.prerelease = [r[@"prerelease"] isKindOfClass:[NSNumber class]] && [r[@"prerelease"] boolValue];
+                id assets = r[@"assets"];
+                if ([assets isKindOfClass:[NSArray class]])
+                  for (id ao in (NSArray*)assets) {
+                    if (![ao isKindOfClass:[NSDictionary class]]) continue;
+                    NSDictionary* ad = ao;
+                    auto astr = [&](NSString* k) {
+                      id v = ad[k];
+                      return [v isKindOfClass:[NSString class]] ? std::string([(NSString*)v UTF8String] ?: "") : std::string();
+                    };
+                    vc::ReleaseAsset ra;
+                    ra.name = astr(@"name");
+                    ra.url = astr(@"browser_download_url");
+                    ra.sha256 = vc::parse_sha256_digest(astr(@"digest"));
+                    ra.size = [ad[@"size"] isKindOfClass:[NSNumber class]] ? [ad[@"size"] longLongValue] : 0;
+                    ri.assets.push_back(ra);
+                  }
                 rels.push_back(ri);
               }
           }
           const vc::UpdateCheck u = problem.empty() ? vc::pick_update(VIRGIL_VERSION, rels) : vc::UpdateCheck();
           on_main(^{
-            if (quietly && (!problem.empty() || !u.available)) return;
+            if (quietly && (!problem.empty() || !u.available || vcmac::update_in_progress())) return;
             [NSApp activateIgnoringOtherApps:YES];
             NSAlert* a = [[NSAlert alloc] init];
             if (!problem.empty()) {
@@ -857,18 +874,30 @@ RemoteInfo parse_remote(const std::string& status_body) {
               return;
             }
             a.messageText = u.available ? @"An update is available" : @"Virgil is up to date";
-            a.informativeText = ns(u.text + (u.available ? "\n\nDownload it from the release page, then install it "
-                                                           "over this version (settings are kept)."
-                                                         : ""));
+            // A portable copy is replaced by hand: the package installs Virgil on the Mac.
+            vc::ReleaseAsset pkg;
+            const bool can_install = u.available && !portable() && vc::mac_installer(u.latest, &pkg);
+            a.informativeText =
+                ns(u.text + (can_install   ? "\n\nVirgil Control can install it now (an administrator's password is "
+                                             "needed; settings are kept). Audio on this Mac stops for a few seconds "
+                                             "while it installs."
+                             : u.available ? "\n\nDownload it from the release page, then install it "
+                                             "over this version (settings are kept)."
+                                           : ""));
+            if (can_install) [a addButtonWithTitle:@"Download and Install"];
             if (u.available) {
               [a addButtonWithTitle:@"Open release page"];
               [a addButtonWithTitle:@"Later"];
             } else {
               [a addButtonWithTitle:@"OK"];
             }
-            if ([a runModal] == NSAlertFirstButtonReturn && u.available) {
-              NSString* url = ns(u.latest.url.empty() ? std::string(vc::kUpdateReleasesPage) : u.latest.url);
-              [[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:url]];
+            const NSModalResponse answer = [a runModal];
+            const std::string page = u.latest.url.empty() ? std::string(vc::kUpdateReleasesPage) : u.latest.url;
+            if (can_install && answer == NSAlertFirstButtonReturn) {
+              const std::string& tag = u.latest.tag;
+              vcmac::install_update(pkg, tag.size() > 1 && tag[0] == 'v' ? tag.substr(1) : tag, page);
+            } else if (u.available && answer == (can_install ? NSAlertSecondButtonReturn : NSAlertFirstButtonReturn)) {
+              [[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:ns(page)]];
             }
           });
         }];

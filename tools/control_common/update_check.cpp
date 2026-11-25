@@ -36,4 +36,29 @@ UpdateCheck pick_update(const std::string& current_version, const std::vector<Re
   return r;
 }
 
+std::string parse_sha256_digest(const std::string& digest) {
+  const std::string prefix = "sha256:";
+  if (digest.size() != prefix.size() + 64 || digest.compare(0, prefix.size(), prefix) != 0) return "";
+  std::string hex = digest.substr(prefix.size());
+  for (char& c : hex) {
+    if (c >= 'A' && c <= 'F') c = char(c - 'A' + 'a');
+    if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) return "";
+  }
+  return hex;
+}
+
+bool mac_installer(const ReleaseInfo& release, ReleaseAsset* out) {
+  const std::string from = std::string("https://github.com/") + kUpdateRepo + "/releases/download/";
+  const std::string suffix = "-macos.pkg";
+  for (const auto& a : release.assets) {
+    if (a.name.size() <= suffix.size() || a.name.compare(a.name.size() - suffix.size(), suffix.size(), suffix) != 0)
+      continue;
+    if (a.url.compare(0, from.size(), from) != 0 || a.sha256.size() != 64) continue;
+    if (a.size <= 0 || a.size > 200 * 1024 * 1024) continue;
+    *out = a;
+    return true;
+  }
+  return false;
+}
+
 }  // namespace vc

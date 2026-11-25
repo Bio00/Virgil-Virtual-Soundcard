@@ -252,9 +252,12 @@ it):
 
 **Updates:** *Check for Updates…* (app menu and menu bar icon, macOS) looks
 at the releases of the repository the build comes from
-(`tools/control_common/update_check.cpp`) and opens the release page when a
-newer one is out; the app also checks once a day at start and only speaks up
-when there is one.
+(`tools/control_common/update_check.cpp`). When a newer one is out, *Download
+and Install* downloads its installer, checks it against the SHA-256 GitHub
+publishes, asks for an administrator's password, installs it and reopens
+Virgil Control; audio on the Mac stops for a few seconds. A portable copy
+opens the release page instead. The app also checks once a day at start and
+only speaks up when there is one.
 
 ### Dropouts and diagnostics
 

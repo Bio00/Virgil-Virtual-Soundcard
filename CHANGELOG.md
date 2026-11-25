@@ -1,6 +1,14 @@
 # Changelog
 
 ## Unreleased
+
+## 0.8.4
+- **Updates install from Virgil Control** (macOS): *Download and Install* downloads the new version, checks its SHA-256, installs it (administrator password) and reopens the app.
+- **Renamed transmit channels can be subscribed again**, whatever the start order: the saved names are advertised on mDNS.
+- **Audio comes back by itself after a configuration change or engine restart** (about 10 s), without patching again in Dante Controller.
+- **Switching from Standard to LowLat recovers in about 10 s** (was 90 s on a Yamaha NY64-D): receivers that still ask for longer packets are served, a little later, while that fits their latency.
+- **mDNS announcements and goodbyes**, so Dante Controller does not keep stale channel names.
+- A packet macOS refuses with HostUnreachable is sent once more.
 - **macOS: the Virgil Virtual Soundcard is there only while Virgil runs**, as with Dante Virtual Soundcard. *Stop* in Virgil Control (window, menu bar icon or web panel) removes it from the Mac's audio devices at once and *Start* brings it back; if the service is gone (not running, crashed) it disappears after 15 s, so an engine restart for a settings or network change does not take it away from apps. Before, the driver always showed it, silent while Virgil was stopped. Needs the new service and driver together; older drivers keep showing it.
 - **macOS: coreaudiod no longer stays busy after installing.** The installer restarts coreaudiod to load the driver; macOS could then leave its AirPlay helper (AirPlayXPCHelper) re-registering with coreaudiod about 15 times a second, which kept coreaudiod and the system audio services near 100% CPU and made apps such as StageRack hang for ~40 s when opening audio. The installer, the uninstaller and the portable driver installer now restart the AirPlay helper too (launchd relaunches it). Already affected: `sudo killall AirPlayXPCHelper`, or restart the Mac.
 - **Presets in Settings:** *LowLat mode*, *Wi-Fi mode* and *Standard* fill the form (macOS app and web panel).
