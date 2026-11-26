@@ -41,6 +41,16 @@ pub fn set_clock_master(id: Option<[u8; 8]>) {
 
 // Virgil patch: the version Dante Controller shows as the device's software
 // version (Inferno's own crate version otherwise).
+static CLOCK_LOCKED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+/// Whether the clock is locked to its leader (Dante Controller's clock status).
+pub fn set_clock_locked(locked: bool) {
+  CLOCK_LOCKED.store(locked, std::sync::atomic::Ordering::Relaxed);
+}
+pub fn clock_locked() -> bool {
+  CLOCK_LOCKED.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 static PRODUCT_VERSION: std::sync::Mutex<Option<(u8, u8, u16)>> = std::sync::Mutex::new(None);
 
 pub fn set_product_version(major: u8, minor: u8, patch: u16) {
@@ -86,7 +96,7 @@ struct Multicaster<'s> {
   pending_sample_rate: Option<u32>,
   // Virgil patch: what Dante Controller was last told, to tell it of changes.
   if_stats: crate::if_stats::Monitor,
-  told_clock: Option<Option<[u8; 8]>>,
+  told_clock: Option<(Option<[u8; 8]>, bool)>,
   tx_flows_seen: Vec<Option<u64>>,
   rx_flows_seen: Vec<Option<u64>>,
 }
@@ -94,10 +104,10 @@ struct Multicaster<'s> {
 /// Clock status (opcode ...0020). After the leader ids, as a Dante card sends
 /// it: one PTP port with its IEEE 1588 state (6 leader, 9 follower), shown in
 /// Dante Controller's "Primary v1 Multicast".
-fn clock_status_content(mac: [u8; 6], freq_offset: i32, leader: Option<[u8; 8]>) -> Vec<u8> {
+fn clock_status_content(mac: [u8; 6], freq_offset: i32, leader: Option<[u8; 8]>, locked: bool) -> Vec<u8> {
   let mut own = [0u8; 8];
   own[..6].copy_from_slice(&mac);
-  let servo: u8 = if leader.is_some() { 3 } else { 1 }; // 1 = not locked
+  let servo: u8 = if leader.is_some() && locked { 3 } else { 1 }; // 1 = not locked
   let port_state: u8 = match leader {
     Some(l) if l == own => 6,
     Some(_) => 9,
@@ -199,8 +209,8 @@ impl<'s> Multicaster<'s> {
 
   async fn send_board_info(&mut self) {
     let mut content = [0u8; 200];
-    // Firmware version:
-    content[0..4].copy_from_slice(&[4, 1, 0, 6]);
+    // Dante software version (Virgil patch: the current one, was 4.1.6):
+    content[0..4].copy_from_slice(&super::arc28::DANTE_SOFTWARE_VERSION);
     content[0x23] = 2;
     // Virgil patch: no hardware (4..8, 0x24..0x28) or boot (0x28..0x2c)
     // version, a software device has none.
@@ -484,8 +494,9 @@ impl<'s> Multicaster<'s> {
       self.self_info.mac_address.octets(),
       self.get_freq_offset_ppb().unwrap_or(0),
       leader,
+      clock_locked(),
     );
-    self.told_clock = Some(leader);
+    self.told_clock = Some((leader, clock_locked()));
     self
       .send(self.device_info_destination, 0xffff, [0x07, 0x2a, 0x00, 0x20, 0, 0, 0, 0], &content)
       .await;
@@ -505,7 +516,7 @@ impl<'s> Multicaster<'s> {
   // Virgil patch: tell Dante Controller about a changed clock leader and
   // changed flows, instead of waiting until it asks.
   async fn send_changes(&mut self, flows_tx: &tokio::sync::Mutex<Option<FlowsTransmitter>>) {
-    if self.told_clock != Some(self.clock_leader()) {
+    if self.told_clock != Some((self.clock_leader(), clock_locked())) {
       self.send_clock_stats().await;
     }
     let mut messages = vec![];
@@ -674,7 +685,7 @@ mod tests {
     let mac = [0x00, 0x1d, 0xc1, 1, 2, 3];
     let own = [0x00, 0x1d, 0xc1, 1, 2, 3, 0, 0];
     for (leader, servo, state) in [(Some([9u8; 8]), 3, 9), (Some(own), 3, 6), (None, 1, 4)] {
-      let c = clock_status_content(mac, -5, leader);
+      let c = clock_status_content(mac, -5, leader, true);
       assert_eq!(c.len(), 112);
       assert_eq!(c[3], servo);
       assert_eq!(&c[12..20], &own);

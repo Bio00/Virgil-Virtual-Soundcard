@@ -121,3 +121,10 @@ Changes for Virgil:
     interface utilization in the heartbeat (bytes per second), routing-ready,
     flow and transmit channel change notifications, no empty ones, and
     answers to 0x2204 and 0x3210. Layouts from a Yamaha NY64-D's answers.
+17. ARC 2.8 (new `device_server/arc28.rs`, `arc_server.rs`, `req_resp.rs`,
+    `mdns_server.rs`, `info_mcast_server.rs`): requests with start codes
+    0x28xx (0x1000, 0x1003, 0x1503, 0x2204, 0x2400, 0x2438, 0x3400, 0x3401, 0x3410, 0x2600-0x2602,
+    0x3600)
+    and the announced versions of Dante Virtual Soundcard 4.5.2. Layouts from
+    its answers and from dstack (github.com/zbynekdrlik/dstack, MIT OR
+    Apache-2.0) and netaudio (Unlicense).

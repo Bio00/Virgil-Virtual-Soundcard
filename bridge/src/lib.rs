@@ -281,6 +281,12 @@ pub unsafe extern "C" fn vg_dante_set_clock_master(id: *const u8) {
     inferno_aoip::device_server::set_clock_master(v);
 }
 
+/// Whether the clock is locked to its leader.
+#[no_mangle]
+pub extern "C" fn vg_dante_set_clock_locked(locked: i32) {
+    inferno_aoip::device_server::set_clock_locked(locked != 0);
+}
+
 // ---- channel names ---------------------------------------------------------------
 
 static RENAME_CB: RwLock<Option<extern "C" fn(i32, u32, *const c_char)>> = RwLock::new(None);

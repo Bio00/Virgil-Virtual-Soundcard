@@ -305,7 +305,7 @@ TEST(servo_gate_recovers_from_lasting_shift) {
   int64_t local = 1000000000LL, master = 1700000000000000000LL;
   for (int i = 0; i < 80; ++i, local += 250000000LL, master += 250000000LL) servo.sample(local, master);
   CHECK(servo.locked());
-  for (int i = 0; i < 200; ++i, local += 250000000LL, master += 250000000LL) servo.sample(local, master + 80000);
+  for (int i = 0; i < 600; ++i, local += 250000000LL, master += 250000000LL) servo.sample(local, master + 80000);
   CHECK(std::llabs(servo.model().ptp_at(local) - (master + 80000)) < 10000);
 }
 

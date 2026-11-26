@@ -9,6 +9,8 @@
 // for networks with only virtual devices (and for tests).
 #pragma once
 
+#include <vector>
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cstdint>
@@ -122,6 +124,7 @@ class PiServo {
     nbig_ = 0;
     seeded_ = false;
     reseeded_ = false;
+    preseeded_ = false;
     age_ = 0;
     aerr_ = 0;
     calm_since_ = 0;
@@ -135,13 +138,28 @@ class PiServo {
     count_ = 0;
     nbig_ = 0;
   }
+  // Take over another time (a new leader's), keeping the frequency estimate;
+  // the next sample starts the measurements.
+  void jump_to(const ClockModel& m) {
+    const double drift = drift_ppb_;
+    reset_to(m);
+    drift_ppb_ = drift;
+  }
+  // A frequency estimate measured outside (PtpClock's envelope regression):
+  // replaces the integral term's value and stands in for the raw seed.
+  void set_frequency(double ppb) {
+    drift_ppb_ = ppb;
+    seeded_ = reseeded_ = preseeded_ = true;
+  }
   int64_t last_error_ns() const { return last_err_; }
   double drift_ppb() const { return drift_ppb_; }
   // Smoothed |error| (time constant ~5 s), what the lock decision uses.
   double filtered_error_ns() const { return aerr_; }
 
-  double kp = 0.03;
-  double ki = 0.0006;
+  // Gains for software timestamps (conservative: a high proportional gain
+  // turns timestamp noise into frequency swings).
+  double kp = 0.015;
+  double ki = 0.00015;
   int64_t step_threshold_ns = 1000000;  // 1 ms
   // Once tracking, an error beyond the threshold steps only after this many
   // consecutive windows agree on it (a passing timestamp disturbance must
@@ -149,13 +167,13 @@ class PiServo {
   int confirm_windows = 5;
   // Gain schedule: start with the fast gains, blend geometrically to kp/ki
   // between update fast_updates and 3 * fast_updates.
-  double kp_fast = 0.1;
-  double ki_fast = 0.003;
-  int fast_updates = 60;
+  double kp_fast = 0.125;
+  double ki_fast = 0.00075;
+  int fast_updates = 30;
   // Lock: smoothed |error| below lock_error_ns, frequency moving less than
   // lock_drift_ppb over the last ~4 s, both for lock_hold_s seconds.
   double lock_error_ns = 100000;
-  double lock_drift_ppb = 1000;
+  double lock_drift_ppb = 3000;
   double lock_hold_s = 5;
   // The frequency is seeded from a raw measurement over this long, and
   // refined once over 4x as long.
@@ -176,6 +194,7 @@ class PiServo {
   int64_t big_errs_[8] = {};
   int rejects_ = 0;  // consecutive samples rejected by the envelope gate
   bool seeded_ = false;  // frequency seeded from a raw measurement
+  bool preseeded_ = false;
   bool reseeded_ = false;  // and refined once over a longer baseline
   double drift_ppb_ = 0;
   double rms_ = 0;
@@ -193,6 +212,77 @@ class PiServo {
   void update_lock(int64_t local, int64_t err, double dt);
 };
 
+// Sync selection for software timestamps. A USB network adapter delivers
+// packets in batches, so receive times scatter by hundreds of microseconds,
+// always late: every second, the least delayed Sync of the last few seconds
+// ("lucky packet", judged against the clock model so the frequency offset
+// does not bias the choice) is the one the servo gets. The frequency is
+// measured by a line fitted to the lower envelope of those choices over the
+// last minute, as NTP implementations do, instead of by the servo's
+// integral term, which follows the noise.
+class SyncFilter {
+ public:
+  struct Pair {
+    int64_t t1 = 0, t2 = 0;  // master send time, local receive time
+  };
+  void clear() { n_ = since_ = 0; hist_.clear(); }
+  // One Sync; true every `every` Syncs, with the pick in *best.
+  bool push(Pair p, const ClockModel& m, int window, int every, Pair* best) {
+    ring_[n_++ % kRing] = p;
+    if (++since_ < every) return false;
+    since_ = 0;
+    const int k = std::min({n_, window, kRing});
+    *best = p;
+    for (int i = 1; i <= k; ++i) {
+      const Pair& c = ring_[(n_ - i) % kRing];
+      if (m.ptp_at(c.t2) - c.t1 < m.ptp_at(best->t2) - best->t1) *best = c;
+    }
+    if (hist_.empty() || best->t2 != hist_.back().t2) hist_.push_back(*best);
+    if (hist_.size() > 64) hist_.erase(hist_.begin());
+    return true;
+  }
+  // Frequency (master/local - 1, ppb) of the last picks; false before 8 s.
+  bool frequency(double* ppb) const {
+    if (hist_.size() < 8 || hist_.back().t2 - hist_.front().t2 < 8000000000LL) return false;
+    const double x0 = double(hist_.front().t2), y0 = double(hist_.front().t2 - hist_.front().t1);
+    std::vector<int> use(hist_.size());
+    for (size_t i = 0; i < use.size(); ++i) use[i] = int(i);
+    double slope = 0;
+    for (int it = 0; it < 4; ++it) {
+      double mx = 0, my = 0;
+      for (int i : use) {
+        mx += double(hist_[i].t2) - x0;
+        my += double(hist_[i].t2 - hist_[i].t1) - y0;
+      }
+      mx /= double(use.size());
+      my /= double(use.size());
+      double num = 0, den = 0;
+      for (int i : use) {
+        const double x = double(hist_[i].t2) - x0 - mx;
+        num += x * (double(hist_[i].t2 - hist_[i].t1) - y0 - my);
+        den += x * x;
+      }
+      if (den <= 0) return false;
+      slope = num / den;
+      // keep the lower half: the least delayed picks
+      std::vector<std::pair<double, int>> res;
+      for (size_t i = 0; i < hist_.size(); ++i)
+        res.push_back({double(hist_[i].t2 - hist_[i].t1) - y0 - my - slope * (double(hist_[i].t2) - x0 - mx), int(i)});
+      std::sort(res.begin(), res.end());
+      use.clear();
+      for (size_t i = 0; i < std::max<size_t>(4, res.size() / 2); ++i) use.push_back(res[i].second);
+    }
+    *ppb = -slope * 1e9;
+    return true;
+  }
+
+ private:
+  static constexpr int kRing = 64;
+  Pair ring_[kRing];
+  int n_ = 0, since_ = 0;
+  std::vector<Pair> hist_;
+};
+
 class PtpClock : public ClockSource {
  public:
   struct Options {
@@ -204,6 +294,8 @@ class PtpClock : public ClockSource {
     // used. Software receive timestamps are only ever late, never early, so
     // this drops the scheduling hiccups (1 s at Dante's 4 Sync/s).
     int sync_window = 4;
+    // Syncs (4 a second) the least delayed one is picked from.
+    int sync_filter = 16;
     // Wi-Fi network: Sync messages arrive milliseconds late and in bunches
     // (power saving, retries), and some are lost. Use the least-delayed of
     // 16 (4 s), realign only for errors above 10 ms that 8 windows agree on,
@@ -290,9 +382,11 @@ class PtpClock : public ClockSource {
   uint16_t sync_seq_ = 0;
   int64_t sync_rx_ns_ = 0;
   bool sync_pending_ = false;
+  bool coarse_done_ = false;
+  int quick_delay_reqs_ = 0;
   int64_t last_t1_ = 0, last_t2_ = 0;
   bool have_pair_ = false;
-  int64_t best_t1_ = 0, best_t2_ = 0;  // least-delayed Sync in the current window
+  SyncFilter filter_;
   int64_t last_best_ms_ = 0;            // its t2 - t1, from the last full window
   int64_t last_best_t2_ = 0;            // and when it arrived
   bool have_best_ms_ = false;

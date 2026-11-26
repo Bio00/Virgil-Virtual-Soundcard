@@ -176,7 +176,12 @@ void PiServo::set_wifi(bool wifi) {
   // while settled, and the seed needs a longer baseline (2 ms over 8 s
   // would be 250 ppm off). The gains stay: with 16-Sync windows they keep
   // the error within about 0.5 ms in simulation, where gentler gains let
-  // the bursts pull it several ms off.
+  // the bursts pull it several ms off. (The wired defaults are gentler,
+  // tuned for USB adapters' sub-millisecond scatter.)
+  kp = wifi ? 0.03 : d.kp;
+  ki = wifi ? 0.0006 : d.ki;
+  kp_fast = wifi ? 0.25 : d.kp_fast;
+  ki_fast = wifi ? 0.003 : d.ki_fast;
   lock_drift_ppb = wifi ? 3000 : d.lock_drift_ppb;
   seed_after_ns = wifi ? 30000000000LL : d.seed_after_ns;
 }
@@ -354,6 +359,16 @@ void PiServo::update_lock(int64_t local, int64_t err, double dt) {
     const int i = (hist_n_ - 5) % 8;
     settled = std::fabs(drift_ppb_ - hist_drift_[i]) < lock_drift_ppb;
   }
+  // Once locked, only a clearly larger error unlocks: timestamp noise near
+  // the limit must not make the state flicker (Dante Controller logs every
+  // change as a lost or regained sync).
+  if (locked_) {
+    if (aerr_ > 5 * lock_error_ns) {
+      locked_ = false;
+      calm_since_ = 0;
+    }
+    return;
+  }
   if (settled && aerr_ < lock_error_ns) {
     if (calm_since_ == 0) calm_since_ = local;
     if (double(local - calm_since_) * 1e-9 >= lock_hold_s) locked_ = true;
@@ -368,6 +383,7 @@ bool PtpClock::start(const Options& o) {
   stop();
   opt_ = o;
   if (o.wifi) opt_.sync_window = std::max(opt_.sync_window, 16);
+  if (o.wifi) opt_.sync_filter = std::max(opt_.sync_filter, 64);
   servo_.set_wifi(o.wifi);
   master_timeout_ns_ = o.wifi ? 10000000000LL : 4000000000LL;
   if (!event_.open(ptp1::kEventPort) || !general_.open(ptp1::kGeneralPort)) {
@@ -522,7 +538,12 @@ void PtpClock::run() {
       jitter_state_ ^= jitter_state_ << 13;
       jitter_state_ ^= jitter_state_ >> 7;
       jitter_state_ ^= jitter_state_ << 17;
-      next_delay_req_ns_ = now + 750000000LL + int64_t(jitter_state_ % 500) * 1000000LL;
+      // The first ones quickly (the servo waits for them), then at the usual
+      // pace, spread so that followers do not ask all at once.
+      next_delay_req_ns_ = now + (delay_count_ < 9 && quick_delay_reqs_ < 12
+                                      ? 150000000LL + int64_t(jitter_state_ % 100) * 1000000LL
+                                      : 750000000LL + int64_t(jitter_state_ % 500) * 1000000LL);
+      ++quick_delay_reqs_;
     }
   }
 }
@@ -586,8 +607,11 @@ void PtpClock::consider_master(const ptp1::PortId& src, const ptp1::ClockProps& 
     have_best_ms_ = false;
     delay_count_ = 0;
     window_count_ = 0;
+    filter_.clear();
     mean_path_delay_ = 0;
     next_delay_req_ns_ = now;
+    coarse_done_ = false;
+    quick_delay_reqs_ = 0;
     servo_.allow_step();  // a new timeline steps at once
   }
   have_master_ = true;
@@ -685,23 +709,44 @@ void PtpClock::handle_general(const uint8_t* p, size_t n) {
 }
 
 void PtpClock::process_sync_pair(int64_t t1, int64_t t2) {
+  // VIRGIL_PTP_TRACE=<file>: every Sync's timestamps, for offline analysis.
+  static FILE* trace = [] {
+    const char* p = std::getenv("VIRGIL_PTP_TRACE");
+    return p && *p ? std::fopen(p, "w") : nullptr;
+  }();
+  if (trace)
+    std::fprintf(trace, "S %lld %lld %lld\n", (long long)t1, (long long)t2, (long long)mean_path_delay_);
   last_t1_ = t1;
   last_t2_ = t2;
   have_pair_ = true;
   // Need a few path delays before steering: the first ones are unfiltered
   // (the lower quartile of one or two samples is just the latest sample).
-  if (delay_count_ < 4) return;
+  if (delay_count_ < 4) {
+    // But take over the leader's time at the first Sync (late by the path
+    // delay and the timestamp noise only): flows start right away, and the
+    // jump from this computer's time of day, seconds later, cut their audio.
+    if (!coarse_done_) {
+      coarse_done_ = true;
+      ClockModel c = servo_.model();
+      if (std::llabs(c.ptp_at(t2) - t1) > servo_.step_threshold_ns) {
+        VIRGIL_LOG_INFO("ptp: set the clock to the leader's time (%.3f ms away)",
+                        double(c.ptp_at(t2) - t1) / 1e6);
+        c.base_local = t2;
+        c.base_ptp = t1;
+        servo_.jump_to(c);
+        publish(c);
+      }
+    }
+    return;
+  }
   // Least delayed by the model's estimate of the master time at arrival; raw
   // t2 - t1 trends with the frequency offset across the window.
-  const ClockModel mm = servo_.model();
-  if (window_count_ == 0 || mm.ptp_at(t2) - t1 < mm.ptp_at(best_t2_) - best_t1_) {
-    best_t1_ = t1;
-    best_t2_ = t2;
-  }
-  if (++window_count_ < std::max(1, opt_.sync_window)) return;
-  window_count_ = 0;
-  t1 = best_t1_;
-  t2 = best_t2_;
+  SyncFilter::Pair best;
+  if (!filter_.push({t1, t2}, servo_.model(), opt_.sync_filter, std::max(1, opt_.sync_window), &best))
+    return;
+  t1 = best.t1;
+  t2 = best.t2;
+  if (double ppb; filter_.frequency(&ppb)) servo_.set_frequency(ppb);
   last_best_ms_ = t2 - t1;
   last_best_t2_ = t2;
   have_best_ms_ = true;

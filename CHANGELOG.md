@@ -1,6 +1,9 @@
 # Changelog
 
-## Unreleased
+## 0.9.0bio (2026-11-26)
+- **More stable PTP clock on USB adapters.** Software timestamps from USB network adapters scatter by hundreds of microseconds. The servo now gets, every second, the least delayed Sync of the last 4 s (instead of the last 1 s), measures the frequency with a line fitted to the lower envelope of the last minute, uses gentler gains on wired links, and, once locked, unlocks only when the error is 5x the lock limit (Dante Controller no longer logs "lost Clock sync" on noise). On a recorded trace from a 2.5G USB adapter the phase wander went from ~30 us to ~10 us (rms).
+- **Current Dante protocol: ARC 2.8.** Virgil announced the versions of older devices (ARC 2.7.41, Dante 4.1.6); it now announces and speaks those of Dante Virtual Soundcard 4.5.2 (ARC 2.8.15, router 4.4.0, server 4.2.0): device counts and names, channel lists, channel renames and subscriptions in the 2.8 layouts. 2.7 requests are answered as before. Including the 2.8 flow lists and the creation and deletion of multicast flows.
+- **Faster clock start, without the audio cut.** Virgil takes the leader's time at the first Sync (it jumped 8-12 s later, cutting flows already running), asks for the path delay more often at first and estimates the frequency sooner: locked in about 20 s in simulation with a 60 ppm offset (47 s before). Dante Controller shows it unlocked until it is.
 - **Dante Controller shows Virgil as it shows Dante Virtual Soundcard.** Checked against a Yamaha NY64-D and Dante Controller 4.18:
   - Virgil's own name, model and version instead of "Inferno-AoIP", and no made-up hardware and boot versions.
   - The clock leader is the right device: with Virgil on the network, Dante Controller showed "Unknown Device*" as a second primary leader.

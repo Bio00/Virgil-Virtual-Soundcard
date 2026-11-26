@@ -108,6 +108,12 @@ impl Connection {
     let pkt = make_packet(&mut self.send_buff, start_code, seqnum, opcode1, opcode2, content);
     self.server.send(&dst, pkt).await;
   }
+  /// Virgil patch: answer the current request under another start code.
+  pub fn set_response_start_code(&mut self, start_code: u16) {
+    if let Some(rem) = self.remote.as_mut() {
+      rem.start_code = start_code;
+    }
+  }
   pub async fn respond(&mut self, payload: &[u8]) {
     self.respond_with_code(1, payload).await;
   }

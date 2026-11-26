@@ -24,6 +24,7 @@ use tokio::sync::{broadcast as broadcast_queue, mpsc, watch, Mutex};
 use crate::common::*;
 use crate::device_info::DeviceInfo;
 
+pub(crate) mod arc28;
 pub(crate) mod arc_server;
 pub(crate) mod cmc_server;
 pub(crate) mod flows_control_server;
@@ -47,7 +48,7 @@ pub use crate::common::{Clock, ClockDiff, Sample};
 pub use crate::media_clock::{MediaClock, RealTimeClockReceiver};
 pub use crate::ring_buffer::{new_owned, ExternalBufferParameters, PositionReportDestination, RBInput};
 pub use settings::Settings;
-pub use info_mcast_server::{set_clock_master, set_product_version};
+pub use info_mcast_server::{set_clock_locked, set_clock_master, set_product_version};
 pub use flows_tx::{set_tx_max_fpp, tx_max_fpp};
 pub use saved_settings::{current_name, set_name_overrides, set_rename_hook, RenameHook};
 pub use remote_config::{set_device_name_hook, set_remote_setting_hook, DeviceNameHook, RemoteSetting, RemoteSettingHook};

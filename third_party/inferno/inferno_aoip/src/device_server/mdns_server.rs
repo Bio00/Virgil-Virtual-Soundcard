@@ -1,3 +1,4 @@
+use super::arc28;
 use searchfire::{
   broadcast::{BroadcasterBuilder, BroadcasterHandle, ServiceBuilder},
   dns::rr::Name,
@@ -56,9 +57,9 @@ impl DeviceMDNSResponder {
         ServiceBuilder::new(service_type("_netaudio-arc"), hostname.clone(), self_info.arc_port)
           .unwrap()
           .add_ip_address(IpAddr::V4(self_info.ip_address))
-          .add_txt_truncated("arcp_vers=2.7.41")
+          .add_txt_truncated(kv("arcp_vers", arc28::ARCP_VERSION))
           .add_txt_truncated("arcp_min=0.2.4")
-          .add_txt_truncated("router_vers=4.0.2")
+          .add_txt_truncated(kv("router_vers", arc28::ROUTER_VERSION))
           .add_txt_truncated(kv("router_info", &self_info.board_name))
           .add_txt_truncated(kv("mf", &self_info.manufacturer))
           .add_txt_truncated(kv("model", &self_info.model_number))
@@ -74,7 +75,7 @@ impl DeviceMDNSResponder {
           .add_txt_truncated(kv("process", self_info.process_id))
           .add_txt_truncated("cmcp_vers=1.2.0")
           .add_txt_truncated("cmcp_min=1.0.0")
-          .add_txt_truncated("server_vers=4.0.2")
+          .add_txt_truncated(kv("server_vers", arc28::SERVER_VERSION))
           .add_txt_truncated("channels=0x6000004d") // ???
           .add_txt_truncated(kv("mf", &self_info.manufacturer))
           .add_txt_truncated(kv("model", &self_info.model_number))

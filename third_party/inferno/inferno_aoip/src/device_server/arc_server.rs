@@ -1,3 +1,4 @@
+use super::arc28;
 use super::channels_subscriber::ChannelsSubscriber;
 use super::saved_settings::SavedChannelsSettings;
 use super::tx_multicasts::TransmitMulticasts;
@@ -82,6 +83,8 @@ pub async fn run_server(
       subscriber = channels_sub_rx.borrow_and_update().clone();
     }
 
+    // Virgil patch: ARC 2.8 (see arc28.rs)
+    let arc28 = arc28::is_arc28(request.start_code().read());
     if request.opcode2().read() == 0 {
       match request.opcode1().read() {
         channels_and_flows_count::OPCODE => {
@@ -106,7 +109,24 @@ pub async fn run_server(
             unknown7_1: 1,
             unknown8_0: [0; 6],
           };
-          conn.respond_with_struct(CODE_OK, response).await;
+          if arc28 {
+            let mut body =
+              response.binary_serialize_to_array(binary_serde::Endianness::Big).as_slice().to_vec();
+            body[0] |= 0x10; // segmented flows
+            body[1] |= 1; // Dante Controller: the device can be renamed
+            let record = arc28::media_record(
+              body.len(),
+              self_info.tx_channels.len() as u16,
+              self_info.rx_channels.len() as u16,
+              MAX_TX_FLOWS as u16,
+              MAX_RX_FLOWS as u16,
+              MAX_CHANNELS_IN_FLOW as u16,
+            );
+            body.extend_from_slice(&record);
+            conn.respond(&body).await;
+          } else {
+            conn.respond_with_struct(CODE_OK, response).await;
+          }
         }
 
         0x1001 => {
@@ -135,6 +155,213 @@ pub async fn run_server(
           buff.write_bytes(self_info.friendly_hostname.as_bytes());
           buff.write_u8(0);
           conn.respond(buff.as_bytes()).await;
+        }
+
+        get_device_names::OPCODE if arc28 => {
+          let body = arc28::device_names(
+            &self_info.friendly_hostname,
+            &self_info.factory_hostname,
+            &self_info.board_name,
+            ":705",
+          );
+          conn.respond(&body).await;
+        }
+        arc28::CAPABILITIES if arc28 => {
+          conn.respond(&arc28::capabilities()).await;
+        }
+        arc28::TX_CHANNELS if arc28 => {
+          let (code, body) = arc28::channels_page(&self_info, request.content(), None);
+          conn.respond_with_code(code, &body).await;
+        }
+        arc28::RX_CHANNELS if arc28 => {
+          let subscription = |index: usize| {
+            subscriber.as_ref().and_then(|s| s.channel_status(index)).map(|s| arc28::ListedSubscription {
+              tx_channel: s.tx_channel_name.to_string(),
+              tx_host: s.tx_hostname.to_string(),
+              status: s.status as u32,
+            })
+          };
+          let (code, body) = arc28::channels_page(&self_info, request.content(), Some(&subscription));
+          conn.respond_with_code(code, &body).await;
+        }
+        op @ (arc28::TX_NAMES_SET | arc28::RX_NAMES_SET) if arc28 => {
+          let is_tx = op == arc28::TX_NAMES_SET;
+          let channels = if is_tx { &self_info.tx_channels } else { &self_info.rx_channels };
+          // An empty name is the default one; all or nothing.
+          let renames = arc28::parse_renames(request.content()).and_then(|items| {
+            items
+              .into_iter()
+              .map(|(id, name)| {
+                let ch = channels.get((id as usize).checked_sub(1)?)?;
+                let name = if name.is_empty() { ch.factory_name.to_string() } else { name };
+                super::saved_settings::valid_channel_name(&name).then_some((id, name))
+              })
+              .collect::<Option<Vec<_>>>()
+          });
+          match renames {
+            Some(renames) if !renames.is_empty() => {
+              for (id, name) in &renames {
+                let index = *id as usize - 1;
+                info!("renaming {} channel id {id} to {name}", if is_tx { "TX" } else { "RX" });
+                if is_tx {
+                  mdns_server.remove_tx_channel(index);
+                  saved_channels.rename_tx_channel(index, name.clone());
+                  mdns_server.add_tx_channel(index);
+                } else {
+                  saved_channels.rename_rx_channel(index, name.clone());
+                }
+              }
+              let indices = || renames.iter().map(|(id, _)| *id as usize - 1);
+              if is_tx {
+                for kind in [TX_CHANNEL_CHANGE, TX_LABEL_CHANGE] {
+                  mcast.send(make_change_notification(kind, indices())).await.log_and_forget();
+                }
+                conn.respond(&arc28::renames_echo(&renames)).await;
+              } else {
+                mcast.send(make_channel_change_notification(indices())).await.log_and_forget();
+                conn.respond(&[]).await;
+              }
+            }
+            _ => {
+              error!("refusing channel rename: {}", hex::encode(request.content()));
+              conn.respond_with_code(0x0022, &[]).await;
+            }
+          }
+        }
+        arc28::RX_SUBSCRIBE if arc28 => match arc28::parse_subscriptions(request.content()) {
+          Some(items) => {
+            for (id, names) in items {
+              if id == 0 || id as usize > self_info.rx_channels.len() {
+                error!("got connect/disconnect request for nonexisting channel {id}");
+                continue;
+              }
+              let Some(channels_recv) = &subscriber else { continue };
+              let index = id as usize - 1;
+              match names {
+                Some((tx_channel, tx_host)) => {
+                  info!("connection requested: {id} <- {tx_channel:?} @ {tx_host:?}");
+                  channels_recv.subscribe(index, &tx_channel, &tx_host).await;
+                }
+                None => {
+                  info!("disconnect requested: local channel {id}");
+                  channels_recv.unsubscribe(index).await;
+                }
+              }
+            }
+            conn.respond(&[]).await;
+          }
+          None => {
+            error!("subscription request not understood: {}", hex::encode(request.content()));
+            conn.respond_with_code(0x0022, &[]).await;
+          }
+        },
+        arc28::TX_FLOWS if arc28 => {
+          let flows = flows_tx.lock().await.as_ref().map(|tx| {
+            let infos = tx.get_flows_info();
+            infos
+              .iter()
+              .enumerate()
+              .filter_map(|(i, f)| f.as_ref().map(|f| (i as u16 + 1, f)))
+              .map(|(id, f)| arc28::ListedTxFlow {
+                id,
+                name: format!("{}_{}", id, self_info.process_id),
+                rx_host: f.rx_hostname.clone(),
+                rx_flow: f.rx_flow_name.clone(),
+                destination: Some((f.dst_addr, f.dst_port)),
+                channels: f.local_channel_indices.iter().map(|c| c.map_or(0, |i| i as u16 + 1)).collect(),
+                fpp: super::flows_tx::tx_max_fpp() as u16,
+              })
+              .collect_vec()
+          });
+          let (code, body) = arc28::tx_flows_page(
+            &self_info,
+            request.content(),
+            MAX_TX_FLOWS.min(16) as usize,
+            flows.unwrap_or_default(),
+          );
+          conn.respond_with_code(code, &body).await;
+        }
+        arc28::RX_FLOWS if arc28 => {
+          let flows = match subscriber.as_ref() {
+            Some(s) => s
+              .flows_info()
+              .read()
+              .unwrap_or_else(|e| e.into_inner())
+              .iter()
+              .enumerate()
+              .filter_map(|(i, f)| f.as_ref().map(|f| (i as u16 + 1, f)))
+              .map(|(id, f)| arc28::ListedRxFlow {
+                id,
+                port: f.rx_port,
+                latency_ns: (f.latency_samples as u64 * 1_000_000_000u64 / self_info.sample_rate.max(1) as u64)
+                  .min(u32::MAX as u64) as u32,
+                slots: f
+                  .channels_map
+                  .iter()
+                  .map(|m| (0..m.len()).filter(|c| m.get(*c).unwrap_or(false)).collect())
+                  .collect(),
+              })
+              .collect_vec(),
+            None => vec![],
+          };
+          let (code, body) =
+            arc28::rx_flows_page(&self_info, request.content(), MAX_RX_FLOWS.min(16) as usize, flows);
+          conn.respond_with_code(code, &body).await;
+        }
+        arc28::TX_FLOW_CREATE if arc28 => {
+          let asked = arc28::parse_create(request.content()).filter(|(id, channels)| {
+            *id as u32 <= MAX_TX_FLOWS && channels.iter().all(|c| *c as usize <= self_info.tx_channels.len())
+          });
+          let free = match (&asked, flows_tx.lock().await.as_ref()) {
+            (Some((id, _)), Some(tx)) => tx.get_flows_info()[*id as usize - 1].is_none(),
+            _ => false,
+          };
+          match (asked, tx_multicasts.lock().await.as_ref()) {
+            (Some((id, channels)), Some(txm)) if free => {
+              let indices = channels.iter().map(|c| Some(*c as usize - 1)).collect_vec();
+              txm.add_flow(id as usize - 1, indices).await;
+              let flow = arc28::ListedTxFlow {
+                id,
+                name: format!("{}_{}", id, self_info.process_id),
+                rx_host: None,
+                rx_flow: None,
+                destination: None,
+                channels,
+                fpp: super::flows_tx::tx_max_fpp() as u16,
+              };
+              let body = arc28::created_flow(&self_info, MAX_TX_FLOWS.min(16) as usize, flow);
+              conn.respond(&body).await;
+            }
+            _ => {
+              error!("refusing multicast flow: {}", hex::encode(request.content()));
+              conn.respond_with_code(0x0022, &[]).await;
+            }
+          }
+        }
+        arc28::TX_FLOW_DELETE if arc28 => {
+          let id = arc28::parse_delete(request.content()).filter(|id| *id as u32 <= MAX_TX_FLOWS);
+          let deleted = match (id, tx_multicasts.lock().await.as_ref()) {
+            (Some(id), Some(txm)) => txm.remove_flow(id as usize - 1).await.is_ok(),
+            _ => false,
+          };
+          if deleted {
+            info!("deleted multicast tx flow id {}", id.unwrap_or(0));
+            conn.respond(&[]).await;
+          } else {
+            conn.respond_with_code(0x0022, &[]).await;
+          }
+        }
+        // As Dante Virtual Soundcard answers
+        0x2404 if arc28 => {
+          conn.respond_with_code(0x30, &[]).await;
+        }
+        0x2204 if arc28 => {
+          // TX flow labels: none
+          let slots = MAX_TX_FLOWS.min(16) as usize;
+          let mut body = vec![0u8; 2 + 2 * slots];
+          body[0] = slots as u8;
+          conn.set_response_start_code(arc28::START_CODE_2801);
+          conn.respond(&body).await;
         }
 
         get_device_names::OPCODE => {
@@ -253,6 +480,10 @@ pub async fn run_server(
             self_info.tx_channels.len().min(32).try_into().unwrap(),
             self_info.tx_channels.iter().enumerate(),
             |(channel_index, ch), bytes| {
+              // ARC 2.8 devices list only the changed names
+              if arc28 && *ch.friendly_name.read().unwrap_or_else(|e| e.into_inner()) == ch.factory_name {
+                return None;
+              }
               if !wrote {
                 bytes.write_u32(0);
                 wrote = true;

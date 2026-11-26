@@ -80,6 +80,8 @@ void vg_dante_set_clock(int64_t last_sync, int64_t shift, double freq_scale);
 // The PTP clock leader's EUI-64 identity (8 bytes), or NULL when there is
 // none. Dante Controller shows it (and the sync state) in its clock status.
 void vg_dante_set_clock_master(const uint8_t* id);
+// Whether the clock is locked to its leader (shown by Dante Controller).
+void vg_dante_set_clock_locked(int locked);
 // Called from a Dante thread when a channel is renamed from the network
 // (Dante Controller): is_tx, 0-based index, new name. NULL removes it.
 void vg_dante_set_rename_callback(void (*cb)(int is_tx, uint32_t index, const char* name));

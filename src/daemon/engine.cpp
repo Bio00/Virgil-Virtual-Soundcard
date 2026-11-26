@@ -629,6 +629,7 @@ void Engine::tick_loop() {
 // an EUI-64 with ff:fe, Dante Controller showed "Unknown Device" as leader).
 void Engine::report_clock_master() {
   if (!dante_) return;
+  vg_dante_set_clock_locked(clock_->state() != kStateFreeRun);
   // Reported as soon as Virgil follows (or is) a leader, like Dante devices
   // that are still settling; the grandmaster is cleared when it is lost.
   unsigned b[6];
