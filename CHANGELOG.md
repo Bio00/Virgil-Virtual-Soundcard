@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.9.1bio (2026-11-26)
+- **No clock jump on running flows at start.** Virgil waits (up to 3 s) for the PTP clock to take the leader's time before it starts Dante: the Yamaha asked for its flows at once, they started on the Mac's time of day and saw the clock jump by decades a moment later ("media clock jumped" in the log).
+
 ## 0.9.0bio (2026-11-26)
 - **More stable PTP clock on USB adapters.** Software timestamps from USB network adapters scatter by hundreds of microseconds. The servo now gets, every second, the least delayed Sync of the last 4 s (instead of the last 1 s), measures the frequency with a line fitted to the lower envelope of the last minute, uses gentler gains on wired links, and, once locked, unlocks only when the error is 5x the lock limit (Dante Controller no longer logs "lost Clock sync" on noise). On a recorded trace from a 2.5G USB adapter the phase wander went from ~30 us to ~10 us (rms).
 - **Current Dante protocol: ARC 2.8.** Virgil announced the versions of older devices (ARC 2.7.41, Dante 4.1.6); it now announces and speaks those of Dante Virtual Soundcard 4.5.2 (ARC 2.8.15, router 4.4.0, server 4.2.0): device counts and names, channel lists, channel renames and subscriptions in the 2.8 layouts. 2.7 requests are answered as before. Including the 2.8 flow lists and the creation and deletion of multicast flows.

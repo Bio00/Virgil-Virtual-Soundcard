@@ -318,6 +318,8 @@ class PtpClock : public ClockSource {
   int senders_seen() const { return senders_seen_.load(); }
   // A master was followed at some point since start().
   bool master_ever_heard() const { return master_ever_.load(); }
+  // The clock has taken the master's time (first Sync) since start().
+  bool time_set() const { return time_set_.load(); }
   // Seconds since start() or since the master was lost, while neither
   // following a master nor acting as one; 0 otherwise.
   double seconds_without_master() const {
@@ -383,6 +385,7 @@ class PtpClock : public ClockSource {
   int64_t sync_rx_ns_ = 0;
   bool sync_pending_ = false;
   bool coarse_done_ = false;
+  std::atomic<bool> time_set_{false};
   int quick_delay_reqs_ = 0;
   int64_t last_t1_ = 0, last_t2_ = 0;
   bool have_pair_ = false;

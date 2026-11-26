@@ -263,6 +263,14 @@ bool Engine::start(std::unique_ptr<ClockSource> clock) {
     vg_dante_set_rename_callback(&Engine::on_rename);
     vg_dante_set_settings_callback(&Engine::on_remote_setting);
     vg_dante_set_device_name_callback(&Engine::on_remote_name);
+    // Let the PTP clock take the leader's time first (its first Sync, well
+    // within a second when a leader is there): devices ask for their flows as
+    // soon as Virgil is up, and a flow started on this computer's time of day
+    // would see the clock jump by decades a moment later.
+    if (auto* ptp = dynamic_cast<PtpClock*>(clock_.get())) {
+      for (int i = 0; i < 60 && !ptp->time_set(); ++i)
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
     dante_ = vg_dante_start(&dc);
     if (!dante_) {
       const char* why = vg_dante_last_error();

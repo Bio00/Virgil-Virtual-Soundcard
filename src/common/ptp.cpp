@@ -736,6 +736,7 @@ void PtpClock::process_sync_pair(int64_t t1, int64_t t2) {
         servo_.jump_to(c);
         publish(c);
       }
+      time_set_ = true;
     }
     return;
   }
